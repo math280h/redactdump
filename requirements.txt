@@ -1,0 +1,2 @@
+configargparse==1.5.3
+rich==10.15.2
