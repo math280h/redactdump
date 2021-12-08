@@ -1,2 +1,5 @@
 configargparse==1.5.3
 rich==10.15.2
+setuptools~=59.5.0
+PyYAML~=6.0
+schema~=0.7.5

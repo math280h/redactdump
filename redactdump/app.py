@@ -4,6 +4,8 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
 
+from redactdump.core.config import Config
+
 
 class RedactDump:
     def __init__(self):
@@ -19,6 +21,7 @@ class RedactDump:
         )
 
         self.args = parser.parse_args()
+        self.config = Config(self.args.config)
 
     async def run(self):
         self.console.print(self.args)
