@@ -23,7 +23,8 @@ setup(
         'rich==10.15.2',
         'PyYAML==6.0',
         'schema==0.7.4',
-        'configargparse==1.5.3'
+        'configargparse==1.5.3',
+        'faker==10.0.0'
     ],
 
     entry_points={

@@ -3,8 +3,9 @@ from schema import SchemaError, Schema, Optional
 
 
 class Config:
-    def __init__(self, config_file):
-        self.config_file = config_file
+    def __init__(self, args):
+        self.args = args
+        self.config_file = args.config
         self.config = self.load_config()
 
     def load_config(self):
@@ -21,33 +22,53 @@ class Config:
                 },
                 "redact": {
                     Optional("columns"): {
-                        str: [{
-                            "name": str,
-                            "replacement": lambda r: True if r is None or type(r) is str else False,
-                        }]
+                        str: [
+                            {
+                                "name": str,
+                                "replacement": lambda r: True
+                                if r is None or type(r) is str
+                                else False,
+                            }
+                        ]
                     },
                     Optional("patterns"): {
                         Optional("table"): {
-                            str: [{
-                                "pattern": str,
-                                "replacement": lambda r: True if r is None or type(r) is str else False,
-                            }]
+                            str: [
+                                {
+                                    "pattern": str,
+                                    "replacement": lambda r: True
+                                    if r is None or type(r) is str
+                                    else False,
+                                }
+                            ]
                         },
-                        Optional("column"): [{
-                            "pattern": str,
-                            "replacement": lambda r: True if r is None or type(r) is str else False,
-                        }],
-                        Optional("data"): [{
-                            "pattern": str,
-                            "replacement": lambda r: True if r is None or type(r) is str else False
-                        }],
-                    }
+                        Optional("column"): [
+                            {
+                                "pattern": str,
+                                "replacement": lambda r: True
+                                if r is None or type(r) is str
+                                else False,
+                            }
+                        ],
+                        Optional("data"): [
+                            {
+                                "pattern": str,
+                                "replacement": lambda r: True
+                                if r is None or type(r) is str
+                                else False,
+                            }
+                        ],
+                    },
                 },
-                "outputs": [{
-                    "type": lambda t: True if t in ["file", "multi_file"] else False,
-                    "location": str,
-                    Optional("naming"): str
-                }]
+                "outputs": [
+                    {
+                        "type": lambda t: True
+                        if t in ["file", "multi_file"]
+                        else False,
+                        "location": str,
+                        Optional("naming"): str,
+                    }
+                ],
             }
         )
 
