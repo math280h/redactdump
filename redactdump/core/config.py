@@ -32,16 +32,6 @@ class Config:
                         ]
                     },
                     Optional("patterns"): {
-                        Optional("table"): {
-                            str: [
-                                {
-                                    "pattern": str,
-                                    "replacement": lambda r: True
-                                    if r is None or type(r) is str
-                                    else False,
-                                }
-                            ]
-                        },
                         Optional("column"): [
                             {
                                 "pattern": str,

@@ -4,8 +4,10 @@ from redactdump.core.redactor import Redactor
 
 
 class Database:
-    def __init__(self, config):
+    def __init__(self, config, console):
         self.config = config
+        self.console = console
+
         self.redactor = Redactor(config)
         self.engine = create_engine(
             "postgresql://test:password@localhost:5432/postgres",
@@ -41,25 +43,45 @@ class Database:
                 for item in result:
                     return item[0]
 
-    def get_data(self, table: str, offset: int, limit: int):
+    def get_data(self, table: str, rows: list, offset: int, limit: int):
         data = []
         with self.engine.connect() as conn:
             conn = conn.execution_options(
                 postgresql_readonly=True, postgresql_deferrable=True
             )
             with conn.begin():
-                # print(f"SELECT * FROM {table} OFFSET {offset} LIMIT {limit}")
+                self.console.print(
+                    f"[cyan]DEBUG: Running 'SELECT * FROM {table} OFFSET {offset} LIMIT {limit}'[/cyan]"
+                )
                 result = conn.execute(
                     text(f"SELECT * FROM {table} OFFSET {offset} LIMIT {limit}")
                 )
+                records = [dict(zip(row.keys(), row)) for row in result]
 
-                for item in result:
-                    redacted = self.redactor.redact(item)
-                    if redacted != str(item):
-                        redacted = redacted.replace("(", "")
-                        redacted = redacted.replace(")", "")
-                        redacted = redacted.replace("'", "")
-                        item = tuple(item.strip() for item in redacted.split(","))
+                for item in records:
+
+                    if (
+                        self.redactor.data_rules is not None
+                        or self.redactor.column_rules is not None
+                    ):
+                        item = self.redactor.redact(item, rows)
 
                     data.append(item)
         return data
+
+    def get_row_names(self, table: str):
+        names = []
+        with self.engine.connect() as conn:
+            conn = conn.execution_options(
+                postgresql_readonly=True, postgresql_deferrable=True
+            )
+            with conn.begin():
+                result = conn.execute(
+                    text(
+                        f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}'"
+                    )
+                )
+
+                for item in result:
+                    names.append(item[0])
+        return names

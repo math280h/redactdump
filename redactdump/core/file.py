@@ -37,11 +37,12 @@ class File:
 
     def write_to_file(self, table, data):
         for output in self.config.config["outputs"]:
-            if output["type"] == "file":
-                with open(f"{output['location']}.sql", "a") as file:
-                    for line in data:
-                        continue
-            elif output["type"] == "multi_file":
+            if output["type"] == "multi_file":
                 with open(f"{output['location']}/{table}.sql", "a") as file:
-                    for line in data:
-                        file.write(f"INSERT INTO {table} VALUES {line};\n")
+                    for entry in data:
+                        values = []
+                        for value in entry.values():
+                            values.append(str(value))
+                        file.write(
+                            f"INSERT INTO {table} VALUES ({', '.join(values)});\n"
+                        )

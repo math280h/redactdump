@@ -48,13 +48,14 @@ class RedactDump:
 
         self.args = parser.parse_args()
         self.config = Config(self.args)
-        self.database = Database(self.config)
+        self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
 
     def dump(self, table: str):
         self.console.print(f":construction: [blue]Working on table:[/blue] {table}")
 
         row_count = self.database.count_rows(table)
+        rows = self.database.get_row_names(table)
 
         last_num = 0
         step = 100
@@ -65,7 +66,7 @@ class RedactDump:
 
             limit = step if x + step < row_count else step + row_count - x
             self.file.write_to_file(
-                table, self.database.get_data(table, last_num, limit)
+                table, self.database.get_data(table, rows, last_num, limit)
             )
             last_num = x
 
