@@ -2,6 +2,9 @@ from distutils.core import setup
 
 import setuptools
 
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
+
 setup(
     name="redactdump",
 
@@ -17,7 +20,8 @@ setup(
 
     description="redactdump",
 
-    long_description=open("README.md").read(),
+    long_description=long_description,
+    long_description_content_type="text/markdown",
 
     install_requires=[
         'rich==10.15.2',
