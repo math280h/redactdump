@@ -45,7 +45,7 @@ To create a dump you currently must use a configuration file, however in the fut
 
 redactdump uses faker to generate random data.
 
-`replacement` can therefore be any function from the following providers the following:
+`replacement` can therefore be any function from the following providers:
 https://faker.readthedocs.io/en/stable/providers.html
 
 **NOTE: redactdump is currently NOT tested with all providers, some might trigger bugs**
