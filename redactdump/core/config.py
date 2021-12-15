@@ -1,15 +1,32 @@
+import configargparse
+from schema import Optional, Schema, SchemaError
 import yaml
-from schema import SchemaError, Schema, Optional
 
 
 class Config:
-    def __init__(self, args):
+    """Config class for redactdump."""
+
+    def __init__(self, args: configargparse.Namespace) -> None:
+        """
+        Initializes config object.
+
+        Args:
+            args (configargparse.Namespace): Parsed arguments from argparse.
+        """
         self.args = args
         self.config_file = args.config
         self.config = self.load_config()
 
-    def load_config(self):
-        """Loads and validates config"""
+    def load_config(self) -> dict:
+        """
+        Loads and validates config.
+
+        Raises:
+            SchemaError: If config is invalid.
+
+        Returns:
+            dict: Config dictionary
+        """
         config_schema = Schema(
             {
                 "connection": {

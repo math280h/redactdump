@@ -1,7 +1,10 @@
-import re
 from dataclasses import dataclass
-from typing import Pattern, List
+import re
+from typing import Any, List, Pattern
+
 from faker import Faker
+
+from redactdump.core.config import Config
 
 
 @dataclass
@@ -13,7 +16,15 @@ class CustomRule:
 
 
 class Redactor:
-    def __init__(self, config):
+    """Redactor class."""
+
+    def __init__(self, config: Config) -> None:
+        """
+        Initialize Redactor class.
+
+        Args:
+            config (Config): Config object.
+        """
         self.config = config
         self.fake: Faker = Faker()
 
@@ -21,13 +32,14 @@ class Redactor:
         self.column_rules: List[CustomRule] = []
         self.load_rules()
 
-    def load_rules(self):
+    def load_rules(self) -> None:
+        """Load redaction rules."""
         if (
             "data" not in self.config.config["redact"]["patterns"]
             and "column" not in self.config.config["redact"]["patterns"]["data"]
         ):
-            self.data_rules = None
-            self.column_rules = None
+            self.data_rules = []
+            self.column_rules = []
         else:
             for category in self.config.config["redact"]["patterns"]:
                 for pattern in self.config.config["redact"]["patterns"][category]:
@@ -49,7 +61,13 @@ class Redactor:
                             )
                         )
 
-    def get_replacement(self, replacement: str):
+    def get_replacement(self, replacement: str) -> Any:
+        """
+        Get replacement value.
+
+        Args:
+            replacement (str): Replacement.
+        """
         if replacement is not None:
             func = getattr(self.fake, replacement)
             value = func()
@@ -59,6 +77,16 @@ class Redactor:
         return "NULL"
 
     def redact(self, data: dict, rows: list) -> dict:
+        """
+        Redact data.
+
+        Args:
+            data (dict): Data to redact.
+            rows (list): Rows to redact.
+
+        Returns:
+            dict: Redacted data.
+        """
         for rule in self.column_rules:
             for row in [row for row in rows if rule.pattern.search(row)]:
                 data[row] = self.get_replacement(rule.replacement)

@@ -1,9 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
+from typing import Tuple, Union
+
 import configargparse
 from rich.console import Console
-from concurrent.futures import ThreadPoolExecutor
 from rich.panel import Panel
-from rich.text import Text
 from rich.table import Table
+from rich.text import Text
 
 from redactdump.core.config import Config
 from redactdump.core.database import Database
@@ -11,7 +13,9 @@ from redactdump.core.file import File
 
 
 class RedactDump:
-    def __init__(self):
+    """RedactDump is a tool for redacting sensitive data from a database."""
+
+    def __init__(self) -> None:
         self.console = Console()
 
         self.console.print(
@@ -79,7 +83,13 @@ class RedactDump:
         self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
 
-    def dump(self, table: str):
+    def dump(self, table: str) -> Tuple[str, int, Union[str, None]]:
+        """
+        Dump a table to a file.
+
+        Args:
+            table (str): Table name.
+        """
         self.console.print(f":construction: [blue]Working on table:[/blue] {table}")
 
         row_count = self.database.count_rows(table)
@@ -101,7 +111,8 @@ class RedactDump:
 
         return table, row_count, location
 
-    async def run(self):
+    async def run(self) -> None:
+        """Run the redactdump application."""
         tables = self.database.get_tables()
 
         if self.config.config["output"]["type"] == "file":
@@ -117,7 +128,7 @@ class RedactDump:
         with ThreadPoolExecutor(max_workers=2) as exe:
             result = exe.map(self.dump, tables)
 
-        self.console.print(f"\n[green]Finished working on all tables[/green]")
+        self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
         table = Table()
         table.add_column("Name", no_wrap=True)
         table.add_column("Row Count", no_wrap=True)
@@ -133,7 +144,8 @@ class RedactDump:
         self.console.print(table)
 
 
-def start_application():
+def start_application() -> None:
+    """Start the application."""
     import asyncio
 
     app = RedactDump()

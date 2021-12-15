@@ -1,10 +1,23 @@
+from typing import List
+
+from rich.console import Console
 from sqlalchemy import create_engine, text
 
+from redactdump.core.config import Config
 from redactdump.core.redactor import Redactor
 
 
 class Database:
-    def __init__(self, config, console):
+    """Database class for RedactDump."""
+
+    def __init__(self, config: Config, console: Console) -> None:
+        """
+        Initialize the database class.
+
+        Args:
+            config (Config): The configuration.
+            console (Console): The console object.
+        """
         self.config = config
         self.console = console
 
@@ -30,7 +43,13 @@ class Database:
             future=True,
         )
 
-    def get_tables(self):
+    def get_tables(self) -> List[str]:
+        """
+        Get a list of tables.
+
+        Returns:
+            List[str]: A list of tables.
+        """
         tables = []
         with self.engine.connect() as conn:
             conn = conn.execution_options(
@@ -47,7 +66,16 @@ class Database:
                     tables.append(item[0])
         return tables
 
-    def count_rows(self, table: str):
+    def count_rows(self, table: str) -> int:
+        """
+        Get the number of rows in a table.
+
+        Args:
+            table (str): The table name.
+
+        Returns:
+            int: The number of rows in the table.
+        """
         with self.engine.connect() as conn:
             conn = conn.execution_options(
                 postgresql_readonly=True, postgresql_deferrable=True
@@ -57,8 +85,21 @@ class Database:
 
                 for item in result:
                     return item[0]
+        return 0
 
-    def get_data(self, table: str, rows: list, offset: int, limit: int):
+    def get_data(self, table: str, rows: list, offset: int, limit: int) -> list:
+        """
+        Get data from a table.
+
+        Args:
+            table (str): The table name.
+            rows (list): The list of row names.
+            offset (int): The offset.
+            limit (int): The limit.
+
+        Returns:
+            list: The data.
+        """
         data = []
         with self.engine.connect() as conn:
             conn = conn.execution_options(
@@ -75,16 +116,22 @@ class Database:
 
                 for item in records:
 
-                    if (
-                        self.redactor.data_rules is not None
-                        or self.redactor.column_rules is not None
-                    ):
+                    if self.redactor.data_rules or self.redactor.column_rules:
                         item = self.redactor.redact(item, rows)
 
                     data.append(item)
         return data
 
-    def get_row_names(self, table: str):
+    def get_row_names(self, table: str) -> list:
+        """
+        Get the row names from a table.
+
+        Args:
+            table (str): The table name.
+
+        Returns:
+            list: The row names.
+        """
         names = []
         with self.engine.connect() as conn:
             conn = conn.execution_options(
