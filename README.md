@@ -41,6 +41,15 @@ optional arguments:
 
 To create a dump you currently must use a configuration file, however in the future you might be able to do it all via CLI.
 
+### Supported replacement values.
+
+redactdump uses faker to generate random data.
+
+`replacement` can therefore be any function from the following providers the following:
+https://faker.readthedocs.io/en/stable/providers.html
+
+**NOTE: redactdump is currently NOT tested with all providers, some might trigger bugs**
+
 ### Example configuration:
 ````yaml
 connection:
@@ -139,11 +148,11 @@ redact:
         replacement: name
     data:
       - pattern: '6'
-        replacement: ipv4
+        replacement: random_int
 
 output:
   type: multi_file
-  naming: 'dump-[table_name]-[timestamp]'
+  naming: 'dump-[table_name]-[timestamp]' # Default: [table_name]-[timestamp]
   location: './output/'
 ```
 
@@ -170,15 +179,15 @@ _(column_1, new_column)_
 <summary>Output</summary>
 
 ```sql
-INSERT INTO table_name VALUES ('189.171.43.59', 'Jessica Stewart');
-INSERT INTO table_name VALUES ('142.82.173.253', 'John Pollard');
-INSERT INTO table_name VALUES ('1.105.198.167', 'Joshua Warren');
-INSERT INTO table_name VALUES ('119.106.193.70', 'Victoria Johnson');
-INSERT INTO table_name VALUES (1, 'Ross Nash');
-INSERT INTO table_name VALUES (1, 'Tammy Richardson');
-INSERT INTO table_name VALUES (12312, 'Shannon Harris');
-INSERT INTO table_name VALUES (99, 'Vicki Gonzalez');
-INSERT INTO table_name VALUES (99, 'Michelle Ali');
+INSERT INTO table_name VALUES (890, 'Yolanda Mcdonald');
+INSERT INTO table_name VALUES (1982, 'Stephen Lewis');
+INSERT INTO table_name VALUES (2952, 'Janet Woodward');
+INSERT INTO table_name VALUES (9307, 'Joshua Price');
+INSERT INTO table_name VALUES (1, 'Tina Morrison');
+INSERT INTO table_name VALUES (1, 'Juan Mejia');
+INSERT INTO table_name VALUES (12312, 'Michael Thornton');
+INSERT INTO table_name VALUES (99, 'Adrian White');
+INSERT INTO table_name VALUES (99, 'Robin Jefferson');
 ```
 
 </details>
