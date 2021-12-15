@@ -21,7 +21,7 @@ class RedactDump:
         self.console.print(
             Panel(
                 Text(
-                    "redactdump\nSafe database dumps\n\nauthor: Mathias V. Nielsen <math280h>",
+                    "redactdump\ndatabase dumps with data redaction\n\nauthor: Mathias V. Nielsen <math280h>",
                     justify="center",
                 ),
                 width=40,
