@@ -151,6 +151,8 @@ output:
 <details>
 <summary>Original data</summary>
 
+_(column_1, new_column)_
+
 ```text
 6,"""John Doe"""
 6,"John Doe"
