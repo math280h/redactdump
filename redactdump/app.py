@@ -2,7 +2,6 @@ import configargparse
 from rich.console import Console
 from concurrent.futures import ThreadPoolExecutor
 from rich.panel import Panel
-from rich.prompt import Prompt
 from rich.text import Text
 from rich.table import Table
 
@@ -36,7 +35,20 @@ class RedactDump:
             help="Path to dump configuration.",
             required=True,
         )
-
+        parser.add_argument(
+            "-u",
+            "--user",
+            type=str,
+            help="Connection username.",
+            required=False,
+        )
+        parser.add_argument(
+            "-p",
+            "--password",
+            type=str,
+            help="Connection password.",
+            required=False,
+        )
         parser.add_argument(
             "-d",
             "--debug",
@@ -48,6 +60,22 @@ class RedactDump:
 
         self.args = parser.parse_args()
         self.config = Config(self.args)
+
+        if "username" not in self.config.config["connection"]:
+            if self.args.user is None:
+                self.console.print(
+                    "[red]Connection username is required, either via config or arguments[/red]"
+                )
+                exit(1)
+            self.config.config["connection"]["username"] = self.args.user
+        if "password" not in self.config.config["connection"]:
+            if self.args.password is None:
+                self.console.print(
+                    "[red]Connection password is required, either via config or arguments[/red]"
+                )
+                exit(1)
+            self.config.config["connection"]["password"] = self.args.password
+
         self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
 
@@ -59,27 +87,32 @@ class RedactDump:
 
         last_num = 0
         step = 100
+        location = None
 
         for x in range(0, row_count, step):
             if x == 0:
                 continue
 
             limit = step if x + step < row_count else step + row_count - x
-            self.file.write_to_file(
+            location = self.file.write_to_file(
                 table, self.database.get_data(table, rows, last_num, limit)
             )
             last_num = x
 
-        return table, row_count
+        return table, row_count, location
 
     async def run(self):
         tables = self.database.get_tables()
 
-        if any(output["type"] == "file" for output in self.config.config["outputs"]):
+        if self.config.config["output"]["type"] == "file":
             self.console.print(
                 "[red]Single file not supported with multiple tables. (Maybe later...)[/red]"
             )
-            exit()
+            exit(1)
+
+        if not tables:
+            self.console.print("[red]No tables found[/red]")
+            exit(1)
 
         with ThreadPoolExecutor(max_workers=2) as exe:
             result = exe.map(self.dump, tables)
@@ -94,7 +127,7 @@ class RedactDump:
 
         for res in sorted_output:
             table.add_row(
-                res[0], str(res[1]), f"{res[0]}.sql" if res[1] > 0 else "No data"
+                res[0], str(res[1]), res[2] if res[2] is not None else "No data"
             )
 
         self.console.print(table)

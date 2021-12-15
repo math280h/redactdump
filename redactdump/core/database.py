@@ -9,8 +9,23 @@ class Database:
         self.console = console
 
         self.redactor = Redactor(config)
+
+        if (
+            self.config.config["connection"]["type"] == "postgresql"
+            or self.config.config["connection"]["type"] == "pgsql"
+        ):
+            engine = "postgresql://"
+        elif self.config.config["connection"]["type"] == "mysql":
+            engine = "mysql+pymysql://"
+        else:
+            raise Exception("Unsupported database engine")
+
         self.engine = create_engine(
-            "postgresql://test:password@localhost:5432/postgres",
+            f"{engine}{self.config.config['connection']['username']}:"
+            f"{self.config.config['connection']['password']}@"
+            f"{self.config.config['connection']['host']}:"
+            f"{self.config.config['connection']['port']}/"
+            f"{self.config.config['connection']['database']}",
             echo=False,
             future=True,
         )

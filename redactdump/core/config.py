@@ -50,15 +50,11 @@ class Config:
                         ],
                     },
                 },
-                "outputs": [
-                    {
-                        "type": lambda t: True
-                        if t in ["file", "multi_file"]
-                        else False,
-                        "location": str,
-                        Optional("naming"): str,
-                    }
-                ],
+                "output": {
+                    "type": lambda t: True if t in ["file", "multi_file"] else False,
+                    "location": str,
+                    Optional("naming"): str,
+                },
             }
         )
 
