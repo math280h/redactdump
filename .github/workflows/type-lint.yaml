@@ -1,0 +1,25 @@
+name: "Typing and Linting"
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Initialize Nox
+      uses: excitedleigh/setup-nox@v2.0.0
+
+    - name: Runs nox
+      run: nox
