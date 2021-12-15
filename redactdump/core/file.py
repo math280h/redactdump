@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 
 
 class File:
@@ -38,7 +39,17 @@ class File:
     def write_to_file(self, table, data):
         for output in self.config.config["outputs"]:
             if output["type"] == "multi_file":
-                with open(f"{output['location']}/{table}.sql", "a") as file:
+                time = datetime.now(timezone.utc)
+                if "naming" in output:
+                    naming = (
+                        output["naming"]
+                        .replace("[timestamp]", time.strftime("%Y-%m-%d-%H-%M-%S"))
+                        .replace("[table_name]", table)
+                    )
+                    name = f"{naming}.sql"
+                else:
+                    name = f"{table}-{time.strftime('%Y-%m-%d-%H-%M-%S')}.sql"
+                with open(f"{output['location']}/{name}", "a") as file:
                     for entry in data:
                         values = []
                         for value in entry.values():
