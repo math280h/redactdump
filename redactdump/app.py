@@ -10,6 +10,8 @@ from rich.text import Text
 from redactdump.core.config import Config
 from redactdump.core.database import Database
 from redactdump.core.file import File
+from redactdump.exceptions.connection import NoPasswordFoundException, NoUsernameFoundException
+from redactdump.exceptions.table import NoTablesFoundException, UnableToGetTablesException
 
 
 class RedactDump:
@@ -72,20 +74,21 @@ class RedactDump:
         self.args = parser.parse_args()
         self.config = Config(self.args)
 
-        if "username" not in self.config.config["connection"]:
-            if self.args.user is None:
-                self.console.print(
-                    "[red]Connection username is required, either via config or arguments[/red]"
-                )
-                exit(1)
-            self.config.config["connection"]["username"] = self.args.user
-        if "password" not in self.config.config["connection"]:
-            if self.args.password is None:
-                self.console.print(
-                    "[red]Connection password is required, either via config or arguments[/red]"
-                )
-                exit(1)
-            self.config.config["connection"]["password"] = self.args.password
+        try:
+            if "username" not in self.config.config["connection"]:
+                if self.args.user is None:
+                    raise NoUsernameFoundException
+                self.config.config["connection"]["username"] = self.args.user
+            if "password" not in self.config.config["connection"]:
+                if self.args.password is None:
+                    raise NoPasswordFoundException
+                self.config.config["connection"]["password"] = self.args.password
+        except (NoUsernameFoundException, NoPasswordFoundException) as e:
+            self.console.print(e.pretty())
+            exit(e.error_code)
+        except Exception as e:
+            self.console.print(e)
+            exit(1)
 
         self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
@@ -120,16 +123,21 @@ class RedactDump:
 
     async def run(self) -> None:
         """Run the redactdump application."""
-        tables = self.database.get_tables()
+        tables = []
+
+        try:
+            tables = self.database.get_tables()
+        except (NoTablesFoundException, UnableToGetTablesException) as e:
+            self.console.print(e.pretty())
+            exit(e.error_code)
+        except Exception as e:
+            self.console.print(e)
+            exit(1)
 
         if self.config.config["output"]["type"] == "file":
             self.console.print(
                 "[red]Single file not supported with multiple tables. (Maybe later...)[/red]"
             )
-            exit(1)
-
-        if not tables:
-            self.console.print("[red]No tables found[/red]")
             exit(1)
 
         with ThreadPoolExecutor(max_workers=self.args.max_workers) as exe:

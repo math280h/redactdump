@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, text
 
 from redactdump.core.config import Config
 from redactdump.core.redactor import Redactor
+from redactdump.exceptions.table import NoTablesFoundException, UnableToGetTablesException
 
 
 class Database:
@@ -50,21 +51,26 @@ class Database:
         Returns:
             List[str]: A list of tables.
         """
-        tables = []
-        with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
-            with conn.begin():
-                result = conn.execute(
-                    text(
-                        "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema='public'"
-                    )
+        try:
+            tables = []
+            with self.engine.connect() as conn:
+                conn = conn.execution_options(
+                    postgresql_readonly=True, postgresql_deferrable=True
                 )
+                with conn.begin():
+                    result = conn.execute(
+                        text(
+                            "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema='public'"
+                        )
+                    )
 
-                for item in result:
-                    tables.append(item[0])
-        return tables
+                    for item in result:
+                        tables.append(item[0])
+            if not tables:
+                raise NoTablesFoundException
+            return tables
+        except Exception as e:
+            raise UnableToGetTablesException from e
 
     def count_rows(self, table: str) -> int:
         """
