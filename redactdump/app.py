@@ -54,6 +54,13 @@ class RedactDump:
             required=False,
         )
         parser.add_argument(
+            "--max_workers",
+            type=int,
+            help="Max number of workers.",
+            required=False,
+            default=4,
+        )
+        parser.add_argument(
             "-d",
             "--debug",
             type=bool,
@@ -125,7 +132,7 @@ class RedactDump:
             self.console.print("[red]No tables found[/red]")
             exit(1)
 
-        with ThreadPoolExecutor(max_workers=2) as exe:
+        with ThreadPoolExecutor(max_workers=self.args.max_workers) as exe:
             result = exe.map(self.dump, tables)
 
         self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
