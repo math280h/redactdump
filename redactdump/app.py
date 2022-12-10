@@ -157,7 +157,7 @@ class RedactDump:
             ""
             if "limits" not in self.config.config
             or "max_rows_per_table" not in self.config.config["limits"]
-            else f" (Limited via config)"
+            else " (Limited via config)"
         )
 
         for res in sorted_output:

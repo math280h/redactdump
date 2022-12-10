@@ -114,7 +114,7 @@ class Database:
                     "*"
                     if "limits" not in self.config.config
                     or "select_columns" not in self.config.config["limits"]
-                    else ','.join(self.config.config["limits"]["select_columns"])
+                    else ",".join(self.config.config["limits"]["select_columns"])
                 )
 
                 if self.config.config["debug"]["enabled"]:
@@ -159,7 +159,7 @@ class Database:
                 select_columns = (
                     []
                     if "limits" not in self.config.config
-                       or "select_columns" not in self.config.config["limits"]
+                    or "select_columns" not in self.config.config["limits"]
                     else self.config.config["limits"]["select_columns"]
                 )
 
