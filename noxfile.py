@@ -1,7 +1,7 @@
 import nox
 from nox.sessions import Session
 
-locations = "redactdump", "noxfile.py"
+locations = "redactdump", "noxfile.py", "tests"
 python_versions = ["3.9"]
 nox.options.sessions = "lint", "mypy"
 

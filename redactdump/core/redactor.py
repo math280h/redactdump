@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import re
-from typing import Any, List, Pattern
+from typing import Any, List, Pattern, Union
 
 from faker import Faker
 
@@ -61,7 +61,7 @@ class Redactor:
                             )
                         )
 
-    def get_replacement(self, replacement: str) -> Any:
+    def get_replacement(self, replacement: str) -> Union[str, Any]:
         """
         Get replacement value.
 
