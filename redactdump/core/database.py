@@ -127,7 +127,6 @@ class Database:
                 )
                 records = [dict(zip(row.keys(), row)) for row in result]
                 for item in records:
-                    print(item)
                     if self.redactor.data_rules or self.redactor.column_rules:
                         item = self.redactor.redact(item, rows)
 
