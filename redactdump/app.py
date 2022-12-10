@@ -99,15 +99,25 @@ class RedactDump:
         """
         self.console.print(f":construction: [blue]Working on table:[/blue] {table}")
 
-        row_count = self.database.count_rows(table)
+        row_count = (
+            self.database.count_rows(table)
+            if "limits" not in self.config.config
+            or "max_rows_per_table" not in self.config.config["limits"]
+            else int(self.config.config["limits"]["max_rows_per_table"])
+        )
         rows = self.database.get_row_names(table)
 
         last_num = 0
-        step = 100
+        step = (
+            100
+            if "performance" not in self.config.config
+            or "rows_per_request" not in self.config.config["performance"]
+            else int(self.config.config["performance"]["rows_per_request"])
+        )
         location = None
 
         for x in range(0, row_count, step):
-            if x == 0:
+            if x == 0 and step < row_count:
                 continue
 
             limit = step if x + step < row_count else step + row_count - x
@@ -143,9 +153,18 @@ class RedactDump:
 
         sorted_output = sorted(result, key=lambda d: d[1], reverse=True)
 
+        row_count_limited = (
+            ""
+            if "limits" not in self.config.config
+            or "max_rows_per_table" not in self.config.config["limits"]
+            else f" (Limited via config)"
+        )
+
         for res in sorted_output:
             table.add_row(
-                res[0], str(res[1]), res[2] if res[2] is not None else "No data"
+                res[0],
+                f"{str(res[1])}{row_count_limited}",
+                res[2] if res[2] is not None else "No data",
             )
 
         self.console.print(table)

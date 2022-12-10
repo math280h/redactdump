@@ -37,6 +37,9 @@ class Config:
                     Optional("username"): str,
                     Optional("password"): str,
                 },
+                Optional("limits"): {"max_rows_per_table": int, "select_columns": list},
+                Optional("performance"): {"rows_per_request": int},
+                Optional("debug"): {"enabled": bool},
                 "redact": {
                     Optional("columns"): {
                         str: [
@@ -82,5 +85,9 @@ class Config:
                 config_schema.validate(config)
             except SchemaError as se:
                 raise se
+
+            if "debug" not in config or "enabled" not in config["debug"]:
+                config["debug"] = {}
+                config["debug"]["enabled"] = False
 
             return config

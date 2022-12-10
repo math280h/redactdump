@@ -105,17 +105,29 @@ class Database:
             conn = conn.execution_options(
                 postgresql_readonly=True, postgresql_deferrable=True
             )
+
+            if not set(self.config.config["limits"]["select_columns"]).issubset(rows):
+                return []
+
             with conn.begin():
-                self.console.print(
-                    f"[cyan]DEBUG: Running 'SELECT * FROM {table} OFFSET {offset} LIMIT {limit}'[/cyan]"
+                select = (
+                    "*"
+                    if "limits" not in self.config.config
+                    or "select_columns" not in self.config.config["limits"]
+                    else ','.join(self.config.config["limits"]["select_columns"])
                 )
+
+                if self.config.config["debug"]["enabled"]:
+                    self.console.print(
+                        f"[cyan]DEBUG: Running 'SELECT {select} FROM {table} OFFSET {offset} LIMIT {limit}'[/cyan]"
+                    )
+
                 result = conn.execute(
-                    text(f"SELECT * FROM {table} OFFSET {offset} LIMIT {limit}")
+                    text(f"SELECT {select} FROM {table} OFFSET {offset} LIMIT {limit}")
                 )
                 records = [dict(zip(row.keys(), row)) for row in result]
-
                 for item in records:
-
+                    print(item)
                     if self.redactor.data_rules or self.redactor.column_rules:
                         item = self.redactor.redact(item, rows)
 
@@ -144,6 +156,14 @@ class Database:
                     )
                 )
 
+                select_columns = (
+                    []
+                    if "limits" not in self.config.config
+                       or "select_columns" not in self.config.config["limits"]
+                    else self.config.config["limits"]["select_columns"]
+                )
+
                 for item in result:
-                    names.append(item[0])
+                    if not select_columns or item[0] in select_columns:
+                        names.append(item[0])
         return names
