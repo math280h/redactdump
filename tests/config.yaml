@@ -1,0 +1,21 @@
+connection:
+  type: pgsql
+  host: 127.0.0.1
+  port: 5432
+  database: postgres
+
+redact:
+  patterns:
+    column:
+      - pattern: '^[a-zA-Z]+_name'
+        replacement: name
+    data:
+      - pattern: '192.168.0.1'
+        replacement: ipv4
+      - pattern: 'John Doe'
+        replacement: name
+
+output:
+  type: multi_file
+  naming: 'dump-[table_name]-[timestamp]' # Default: [table_name]-[timestamp]
+  location: 'tests/tmp/test_output'

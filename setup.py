@@ -26,10 +26,10 @@ setup(
     install_requires=[
         'rich==10.15.2',
         'PyYAML==6.0',
-        'schema==0.7.4',
+        'schema==0.7.5',
         'configargparse==1.5.3',
         'SQLAlchemy~=1.4.27',
-        'psycopg2==2.9.2',
+        'psycopg2-binary==2.9.3',
         'pymysql==1.0.2',
         'faker==10.0.0'
     ],
