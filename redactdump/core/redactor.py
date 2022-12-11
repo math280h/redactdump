@@ -104,11 +104,9 @@ class Redactor:
                 if discovered_column is None:
                     raise LookupError
                 if discovered_column.name in columns_redacted:
-                    print("Skipped column: " + discovered_column.name)
                     continue
 
                 if rule.pattern.search(str(value)):
-                    print("Found Match: " + str(rule.pattern))
                     discovered_column.value = self.get_replacement(rule.replacement)
                     columns_redacted.append(discovered_column.name)
                 else:

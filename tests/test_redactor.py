@@ -31,14 +31,14 @@ def test_redaction() -> None:
 
         if redactor.data_rules or redactor.column_rules:
             results = redactor.redact(
-                item, [
+                item,
+                [
                     TableColumn("full_name", "character varying", True, "", None),
                     TableColumn("secondary_name", "character varying", True, "", None),
                     TableColumn("ip", "character varying", True, "", None),
-                    TableColumn("email", "character varying", True, "", None)
-                ]
+                    TableColumn("email", "character varying", True, "", None),
+                ],
             )
-            print(results)
+
             for result in results:
-                print(result)
                 assert result.value != original[idx][result.name]
