@@ -1,4 +1,4 @@
-from typing import List, Union, Any, Tuple
+from typing import List
 
 from rich.console import Console
 from sqlalchemy import create_engine, text
@@ -68,7 +68,8 @@ class Database:
                     table_columns = []
                     columns = conn.execute(
                         text(
-                            f"SELECT column_name, column_default, is_nullable, data_type FROM information_schema.columns WHERE table_name = '{table[0]}'"
+                            f"SELECT column_name, column_default, is_nullable, data_type FROM "
+                            f"information_schema.columns WHERE table_name = '{table[0]}'"
                         )
                     )
                     for column in columns:
@@ -155,7 +156,7 @@ class Database:
                 records = [dict(zip(row.keys(), row)) for row in result]
                 for item in records:
                     if self.redactor.data_rules or self.redactor.column_rules:
-                        item = self.redactor.redact(item, table.columns)
+                        modified_column = self.redactor.redact(item, table.columns)
                     else:
                         for key, value in item.items():
                             column = next(
@@ -163,6 +164,6 @@ class Database:
                             )
                             if column is not None:
                                 column.value = value
-                        item = table.columns
-                    data.append(item)
+                        modified_column = table.columns
+                    data.append(modified_column)
         return data

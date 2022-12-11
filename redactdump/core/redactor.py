@@ -86,23 +86,32 @@ class Redactor:
         Returns:
             dict: Redacted data.
         """
+        columns_redacted = []
         for rule in self.column_rules:
             for column in [
                 column
                 for column in columns
                 if rule.pattern.search(column.name)
-                and column.name in self.config.config["limits"]["select_columns"]
+                and column.name not in columns_redacted
             ]:
                 column.value = self.get_replacement(rule.replacement)
+                columns_redacted.append(column.name)
 
         for rule in self.data_rules:
             for key, value in data.items():
-                column = next((x for x in columns if x.name == key), None)
-                if column is None:
+                discovered_column = next((x for x in columns if x.name == key), None)
+
+                if discovered_column is None:
                     raise LookupError
+                if discovered_column.name in columns_redacted:
+                    print("Skipped column: " + discovered_column.name)
+                    continue
+
                 if rule.pattern.search(str(value)):
-                    column.value = self.get_replacement(rule.replacement)
+                    print("Found Match: " + str(rule.pattern))
+                    discovered_column.value = self.get_replacement(rule.replacement)
+                    columns_redacted.append(discovered_column.name)
                 else:
-                    column.value = value
+                    discovered_column.value = value
 
         return columns

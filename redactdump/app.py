@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Tuple, Union, Optional
+from typing import Optional
 
 import configargparse
 from rich.console import Console

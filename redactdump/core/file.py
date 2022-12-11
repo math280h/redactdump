@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import os
-from typing import Union, List
+from typing import List, Union
 
 from rich.console import Console
 
@@ -79,7 +79,7 @@ class File:
         return name
 
     def write_to_file(
-            self, table: Table, rows: List[List[TableColumn]]
+        self, table: Table, rows: List[List[TableColumn]]
     ) -> Union[str, None]:
         """
         Write data to file.
@@ -100,16 +100,16 @@ class File:
                     values = []
                     for column in row:
                         if (
-                                column.data_type == "bigint"
-                                or column.data_type == "integer"
-                                or column.data_type == "smallint"
-                                or column.data_type == "double precision"
-                                or column.data_type == "numeric"
+                            column.data_type == "bigint"
+                            or column.data_type == "integer"
+                            or column.data_type == "smallint"
+                            or column.data_type == "double precision"
+                            or column.data_type == "numeric"
                         ):
                             values.append(str(column.value))
                         elif (
-                                column.data_type == "bit"
-                                or column.data_type == "bit varying"
+                            column.data_type == "bit"
+                            or column.data_type == "bit varying"
                         ):
                             values.append(str(f"b'{column.value}'"))
                         else:

@@ -37,7 +37,10 @@ class Config:
                     Optional("username"): str,
                     Optional("password"): str,
                 },
-                Optional("limits"): {Optional("max_rows_per_table"): int, Optional("select_columns"): list},
+                Optional("limits"): {
+                    Optional("max_rows_per_table"): int,
+                    Optional("select_columns"): list,
+                },
                 Optional("performance"): {Optional("rows_per_request"): int},
                 Optional("debug"): {"enabled": bool},
                 "redact": {
