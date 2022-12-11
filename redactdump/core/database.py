@@ -1,9 +1,10 @@
-from typing import List
+from typing import List, Union, Any, Tuple
 
 from rich.console import Console
 from sqlalchemy import create_engine, text
 
 from redactdump.core.config import Config
+from redactdump.core.models import Table, TableColumn
 from redactdump.core.redactor import Redactor
 
 
@@ -43,14 +44,14 @@ class Database:
             future=True,
         )
 
-    def get_tables(self) -> List[str]:
+    def get_tables(self) -> List[Table]:
         """
         Get a list of tables.
 
         Returns:
             List[str]: A list of tables.
         """
-        tables = []
+        tables: List[Table] = []
         with self.engine.connect() as conn:
             conn = conn.execution_options(
                 postgresql_readonly=True, postgresql_deferrable=True
@@ -58,20 +59,42 @@ class Database:
             with conn.begin():
                 result = conn.execute(
                     text(
-                        "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema='public'"
+                        "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND "
+                        "table_schema='public' "
                     )
                 )
 
-                for item in result:
-                    tables.append(item[0])
+                for table in result:
+                    table_columns = []
+                    columns = conn.execute(
+                        text(
+                            f"SELECT column_name, column_default, is_nullable, data_type FROM information_schema.columns WHERE table_name = '{table[0]}'"
+                        )
+                    )
+                    for column in columns:
+                        if (
+                            not self.config.config["limits"]["select_columns"]
+                            or column["column_name"]
+                            in self.config.config["limits"]["select_columns"]
+                        ):
+                            table_columns.append(
+                                TableColumn(
+                                    column["column_name"],
+                                    column["data_type"],
+                                    column["is_nullable"],
+                                    column["column_default"],
+                                )
+                            )
+
+                    tables.append(Table(table[0], table_columns))
         return tables
 
-    def count_rows(self, table: str) -> int:
+    def count_rows(self, table: Table) -> int:
         """
         Get the number of rows in a table.
 
         Args:
-            table (str): The table name.
+            table (Table): The table name.
 
         Returns:
             int: The number of rows in the table.
@@ -81,19 +104,20 @@ class Database:
                 postgresql_readonly=True, postgresql_deferrable=True
             )
             with conn.begin():
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
+                result = conn.execute(text(f"SELECT COUNT(*) FROM {table.name}"))
 
                 for item in result:
                     return item[0]
         return 0
 
-    def get_data(self, table: str, rows: list, offset: int, limit: int) -> list:
+    def get_data(
+        self, table: Table, offset: int, limit: int
+    ) -> list[list[TableColumn]]:
         """
         Get data from a table.
 
         Args:
-            table (str): The table name.
-            rows (list): The list of row names.
+            table (Table): The table name.
             offset (int): The offset.
             limit (int): The limit.
 
@@ -106,63 +130,39 @@ class Database:
                 postgresql_readonly=True, postgresql_deferrable=True
             )
 
-            if not set(self.config.config["limits"]["select_columns"]).issubset(rows):
+            if not set(self.config.config["limits"]["select_columns"]).issubset(
+                [column.name for column in table.columns]
+            ):
                 return []
 
             with conn.begin():
                 select = (
                     "*"
-                    if "limits" not in self.config.config
-                    or "select_columns" not in self.config.config["limits"]
+                    if not self.config.config["limits"]["select_columns"]
                     else ",".join(self.config.config["limits"]["select_columns"])
                 )
 
                 if self.config.config["debug"]["enabled"]:
                     self.console.print(
-                        f"[cyan]DEBUG: Running 'SELECT {select} FROM {table} OFFSET {offset} LIMIT {limit}'[/cyan]"
+                        f"[cyan]DEBUG: Running 'SELECT {select} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
                     )
 
                 result = conn.execute(
-                    text(f"SELECT {select} FROM {table} OFFSET {offset} LIMIT {limit}")
+                    text(
+                        f"SELECT {select} FROM {table.name} OFFSET {offset} LIMIT {limit}"
+                    )
                 )
                 records = [dict(zip(row.keys(), row)) for row in result]
                 for item in records:
                     if self.redactor.data_rules or self.redactor.column_rules:
-                        item = self.redactor.redact(item, rows)
-
+                        item = self.redactor.redact(item, table.columns)
+                    else:
+                        for key, value in item.items():
+                            column = next(
+                                (x for x in table.columns if x.name == key), None
+                            )
+                            if column is not None:
+                                column.value = value
+                        item = table.columns
                     data.append(item)
         return data
-
-    def get_row_names(self, table: str) -> list:
-        """
-        Get the row names from a table.
-
-        Args:
-            table (str): The table name.
-
-        Returns:
-            list: The row names.
-        """
-        names = []
-        with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
-            with conn.begin():
-                result = conn.execute(
-                    text(
-                        f"SELECT column_name FROM information_schema.columns WHERE table_name='{table}'"
-                    )
-                )
-
-                select_columns = (
-                    []
-                    if "limits" not in self.config.config
-                    or "select_columns" not in self.config.config["limits"]
-                    else self.config.config["limits"]["select_columns"]
-                )
-
-                for item in result:
-                    if not select_columns or item[0] in select_columns:
-                        names.append(item[0])
-        return names

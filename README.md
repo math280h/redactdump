@@ -76,58 +76,8 @@ output:
 ````
 
 ### Configuration Schema
-<details>
-<summary>Configuration schema</summary>
 
-```python
-Schema({
-    "connection": {
-        "type": str,
-        "host": str,
-        "port": int,
-        "database": str,
-        Optional("username"): str,
-        Optional("password"): str,
-    },
-    "redact": {
-        Optional("columns"): {
-            str: [
-                {
-                    "name": str,
-                    "replacement": lambda r: True
-                    if r is None or type(r) is str
-                    else False,
-                }
-            ]
-        },
-        Optional("patterns"): {
-            Optional("column"): [
-                {
-                    "pattern": str,
-                    "replacement": lambda r: True
-                    if r is None or type(r) is str
-                    else False,
-                }
-            ],
-            Optional("data"): [
-                {
-                    "pattern": str,
-                    "replacement": lambda r: True
-                    if r is None or type(r) is str
-                    else False,
-                }
-            ],
-        },
-    },
-    "output": {
-        "type": lambda t: True if t in ["file", "multi_file"] else False,
-        "location": str,
-        Optional("naming"): str,
-    },
-})
-```
-
-</details>
+The configuration schema can be found [here](redactdump/core/config.py)
 
 ## Example
 
@@ -191,3 +141,25 @@ INSERT INTO table_name VALUES (99, 'Robin Jefferson');
 ```
 
 </details>
+
+## Known limitations
+
+### Data types not supported
+
+* box
+* bytea
+* inet
+* interval
+* circle
+* cidr
+* line
+* lseg
+* macaddr
+* macaddr8
+* pg_lsn
+* pg_snapshot
+* point
+* polygon
+* tsquery
+* tsvector
+* txid_snapshot

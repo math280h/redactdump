@@ -37,8 +37,8 @@ class Config:
                     Optional("username"): str,
                     Optional("password"): str,
                 },
-                Optional("limits"): {"max_rows_per_table": int, "select_columns": list},
-                Optional("performance"): {"rows_per_request": int},
+                Optional("limits"): {Optional("max_rows_per_table"): int, Optional("select_columns"): list},
+                Optional("performance"): {Optional("rows_per_request"): int},
                 Optional("debug"): {"enabled": bool},
                 "redact": {
                     Optional("columns"): {
@@ -89,5 +89,11 @@ class Config:
             if "debug" not in config or "enabled" not in config["debug"]:
                 config["debug"] = {}
                 config["debug"]["enabled"] = False
+
+            if "limits" not in config:
+                config["limits"] = {}
+
+            if "select_columns" not in config["limits"]:
+                config["limits"]["select_columns"] = []
 
             return config

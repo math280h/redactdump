@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 import os
-from typing import Union
+from typing import Union, List
 
 from rich.console import Console
 
 from redactdump.core.config import Config
+from redactdump.core.models import Table, TableColumn
 
 
 class File:
@@ -54,13 +55,13 @@ class File:
             self.console.print()
 
     @staticmethod
-    def get_name(output: dict, table: str) -> str:
+    def get_name(output: dict, table: Table) -> str:
         """
         Get the formatted name of the file.
 
         Args:
             output (dict): Output configuration.
-            table (str): Table name.
+            table (Table): Table.
 
         Returns:
             str: Name of the file.
@@ -70,20 +71,22 @@ class File:
             naming = (
                 output["naming"]
                 .replace("[timestamp]", time.strftime("%Y-%m-%d-%H-%M-%S"))
-                .replace("[table_name]", table)
+                .replace("[table_name]", table.name)
             )
             name = f"{naming}.sql"
         else:
-            name = f"{table}-{time.strftime('%Y-%m-%d-%H-%M-%S')}.sql"
+            name = f"{table.name}-{time.strftime('%Y-%m-%d-%H-%M-%S')}.sql"
         return name
 
-    def write_to_file(self, table: str, data: list) -> Union[str, None]:
+    def write_to_file(
+            self, table: Table, rows: List[List[TableColumn]]
+    ) -> Union[str, None]:
         """
         Write data to file.
 
         Args:
-            table (str): Table name.
-            data (list): Data to write.
+            table (Table): Table name.
+            rows (List[List[TableColumn]]): Data to write.
 
         Returns:
             Union[str, None]: Name of the file.
@@ -92,10 +95,29 @@ class File:
         if output["type"] == "multi_file":
             name = self.get_name(output, table)
             with open(f"{output['location']}/{name}", "a") as file:
-                for entry in data:
+                for row in rows:
+
                     values = []
-                    for value in entry.values():
-                        values.append(str(value))
-                    file.write(f"INSERT INTO {table} VALUES ({', '.join(values)});\n")
+                    for column in row:
+                        if (
+                                column.data_type == "bigint"
+                                or column.data_type == "integer"
+                                or column.data_type == "smallint"
+                                or column.data_type == "double precision"
+                                or column.data_type == "numeric"
+                        ):
+                            values.append(str(column.value))
+                        elif (
+                                column.data_type == "bit"
+                                or column.data_type == "bit varying"
+                        ):
+                            values.append(str(f"b'{column.value}'"))
+                        else:
+                            values.append(str(f"'{column.value}'"))
+
+                    columns = '"' + '", "'.join([column.name for column in row]) + '"'
+                    file.write(
+                        f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});\n"
+                    )
             return name
         return ""
