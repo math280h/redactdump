@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Tuple, Union
+from typing import Optional
 
 import configargparse
 from rich.console import Console
@@ -90,14 +90,16 @@ class RedactDump:
         self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
 
-    def dump(self, table: str) -> Tuple[str, int, Union[str, None]]:
+    def dump(self, table: Table) -> tuple[Table, int, Optional[str]]:
         """
         Dump a table to a file.
 
         Args:
-            table (str): Table name.
+            table (Table): Table name.
         """
-        self.console.print(f":construction: [blue]Working on table:[/blue] {table}")
+        self.console.print(
+            f":construction: [blue]Working on table:[/blue] {table.name}"
+        )
 
         row_count = (
             self.database.count_rows(table)
@@ -105,7 +107,6 @@ class RedactDump:
             or "max_rows_per_table" not in self.config.config["limits"]
             else int(self.config.config["limits"]["max_rows_per_table"])
         )
-        rows = self.database.get_row_names(table)
 
         last_num = 0
         step = (
@@ -122,7 +123,7 @@ class RedactDump:
 
             limit = step if x + step < row_count else step + row_count - x
             location = self.file.write_to_file(
-                table, self.database.get_data(table, rows, last_num, limit)
+                table, self.database.get_data(table, last_num, limit)
             )
             last_num = x
 
@@ -162,7 +163,7 @@ class RedactDump:
 
         for res in sorted_output:
             table.add_row(
-                res[0],
+                res[0].name,
                 f"{str(res[1])}{row_count_limited}",
                 res[2] if res[2] is not None else "No data",
             )

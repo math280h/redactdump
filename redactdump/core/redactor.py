@@ -5,6 +5,7 @@ from typing import Any, List, Pattern, Union
 from faker import Faker
 
 from redactdump.core.config import Config
+from redactdump.core.models import TableColumn
 
 
 @dataclass
@@ -71,29 +72,44 @@ class Redactor:
         if replacement is not None:
             func = getattr(self.fake, replacement)
             value = func()
-            if type(value) is not str:
-                return value
-            return f"'{value}'"
+            return value
         return "NULL"
 
-    def redact(self, data: dict, rows: list) -> dict:
+    def redact(self, data: dict, columns: List[TableColumn]) -> list[TableColumn]:
         """
         Redact data.
 
         Args:
             data (dict): Data to redact.
-            rows (list): Rows to redact.
+            columns (list): Rows to redact.
 
         Returns:
             dict: Redacted data.
         """
+        columns_redacted = []
         for rule in self.column_rules:
-            for row in [row for row in rows if rule.pattern.search(row)]:
-                data[row] = self.get_replacement(rule.replacement)
+            for column in [
+                column
+                for column in columns
+                if rule.pattern.search(column.name)
+                and column.name not in columns_redacted
+            ]:
+                column.value = self.get_replacement(rule.replacement)
+                columns_redacted.append(column.name)
 
         for rule in self.data_rules:
             for key, value in data.items():
-                if rule.pattern.search(str(value)):
-                    data[key] = self.get_replacement(rule.replacement)
+                discovered_column = next((x for x in columns if x.name == key), None)
 
-        return data
+                if discovered_column is None:
+                    raise LookupError
+                if discovered_column.name in columns_redacted:
+                    continue
+
+                if rule.pattern.search(str(value)):
+                    discovered_column.value = self.get_replacement(rule.replacement)
+                    columns_redacted.append(discovered_column.name)
+                else:
+                    discovered_column.value = value
+
+        return columns

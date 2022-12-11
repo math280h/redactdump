@@ -1,6 +1,7 @@
 from configargparse import Namespace
 
 from redactdump.core import Config
+from redactdump.core.models import TableColumn
 from redactdump.core.redactor import Redactor
 
 
@@ -29,8 +30,15 @@ def test_redaction() -> None:
     for idx, item in enumerate(data):
 
         if redactor.data_rules or redactor.column_rules:
-            redactor.redact(item, ["full_name", "email"])
-            assert data[idx]["full_name"] != original[idx]["full_name"]
-            assert data[idx]["secondary_name"] != original[idx]["secondary_name"]
-            assert data[idx]["ip"] != original[idx]["ip"]
-            assert data[idx]["email"] == original[idx]["email"]
+            results = redactor.redact(
+                item,
+                [
+                    TableColumn("full_name", "character varying", True, "", None),
+                    TableColumn("secondary_name", "character varying", True, "", None),
+                    TableColumn("ip", "character varying", True, "", None),
+                    TableColumn("email", "character varying", True, "", None),
+                ],
+            )
+
+            for result in results:
+                assert result.value != original[idx][result.name]
