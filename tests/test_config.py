@@ -8,4 +8,4 @@ def test_config_load() -> None:
     config = Config(Namespace(config="tests/config.yaml"))
 
     assert type(config) is Config
-    assert type(config.config) is dict
+    assert type(config.load_config()) is dict

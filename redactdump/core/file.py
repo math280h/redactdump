@@ -4,14 +4,13 @@ from typing import List, Union
 
 from rich.console import Console
 
-from redactdump.core.config import Config
 from redactdump.core.models import Table, TableColumn
 
 
 class File:
     """File class."""
 
-    def __init__(self, config: Config, console: Console) -> None:
+    def __init__(self, config: dict, console: Console) -> None:
         """
         Initialize the File class.
 
@@ -26,32 +25,36 @@ class File:
 
     def create_output_locations(self) -> None:
         """Create output locations."""
-        if self.config.args.debug:
+        if self.config["debug"]["enabled"]:
             self.console.print("[cyan]DEBUG: Checking output locations...[/cyan]")
 
-        output = self.config.config["output"]
+        output = self.config["output"]
         if output["type"] == "file":
             if not os.path.isfile(f"{output['location']}.sql"):
                 open(f"{output['location']}.sql", "a").close()
-                if self.config.args.debug:
+                if self.config["debug"]["enabled"]:
                     self.console.print(
                         f"[cyan]DEBUG: Created file: {output['location']}.sql[/cyan]"
                     )
             else:
                 # Emtpy file
-                if self.config.args.debug:
+                if self.config["debug"]["enabled"]:
                     self.console.print(
                         f"[cyan]DEBUG: File already exists: {output['location']}.sql[/cyan]"
                     )
-        elif output["type"] == "multi_file":
-            if not os.path.isdir(output["location"]):
-                os.mkdir(output["location"])
-                if self.config.args.debug:
-                    self.console.print(
-                        f"[cyan]DEBUG: Created directory: {output['location']}[/cyan]"
-                    )
+        elif output["type"] == "multi_file" and not os.path.isdir(output["location"]):
+            prev_folder = "."
+            for folder in output["location"].split("/"):
+                if folder != ".":
+                    os.mkdir(f"{prev_folder}/{folder}")
+                    prev_folder = folder
 
-        if self.config.args.debug:
+            if self.config["debug"]["enabled"]:
+                self.console.print(
+                    f"[cyan]DEBUG: Created directory: {output['location']}[/cyan]"
+                )
+
+        if self.config["debug"]["enabled"]:
             self.console.print()
 
     @staticmethod
@@ -91,7 +94,7 @@ class File:
         Returns:
             Union[str, None]: Name of the file.
         """
-        output = self.config.config["output"]
+        output = self.config["output"]
         if output["type"] == "multi_file":
             name = self.get_name(output, table)
             with open(f"{output['location']}/{name}", "a") as file:
@@ -99,18 +102,15 @@ class File:
 
                     values = []
                     for column in row:
-                        if (
-                            column.data_type == "bigint"
-                            or column.data_type == "integer"
-                            or column.data_type == "smallint"
-                            or column.data_type == "double precision"
-                            or column.data_type == "numeric"
-                        ):
+                        if column.data_type in [
+                            "bigint",
+                            "integer",
+                            "smallint",
+                            "double precision",
+                            "numeric",
+                        ]:
                             values.append(str(column.value))
-                        elif (
-                            column.data_type == "bit"
-                            or column.data_type == "bit varying"
-                        ):
+                        elif column.data_type in ["bit", "bit varying"]:
                             values.append(str(f"b'{column.value}'"))
                         else:
                             values.append(str(f"'{column.value}'"))

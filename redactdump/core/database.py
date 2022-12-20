@@ -3,7 +3,6 @@ from typing import List
 from rich.console import Console
 from sqlalchemy import create_engine, text
 
-from redactdump.core.config import Config
 from redactdump.core.models import Table, TableColumn
 from redactdump.core.redactor import Redactor
 
@@ -11,12 +10,12 @@ from redactdump.core.redactor import Redactor
 class Database:
     """Database class for RedactDump."""
 
-    def __init__(self, config: Config, console: Console) -> None:
+    def __init__(self, config: dict, console: Console) -> None:
         """
         Initialize the database class.
 
         Args:
-            config (Config): The configuration.
+            config (dict): The configuration.
             console (Console): The console object.
         """
         self.config = config
@@ -25,21 +24,21 @@ class Database:
         self.redactor = Redactor(config)
 
         if (
-            self.config.config["connection"]["type"] == "postgresql"
-            or self.config.config["connection"]["type"] == "pgsql"
+            self.config["connection"]["type"] == "postgresql"
+            or self.config["connection"]["type"] == "pgsql"
         ):
             engine = "postgresql://"
-        elif self.config.config["connection"]["type"] == "mysql":
+        elif self.config["connection"]["type"] == "mysql":
             engine = "mysql+pymysql://"
         else:
             raise Exception("Unsupported database engine")
 
         self.engine = create_engine(
-            f"{engine}{self.config.config['connection']['username']}:"
-            f"{self.config.config['connection']['password']}@"
-            f"{self.config.config['connection']['host']}:"
-            f"{self.config.config['connection']['port']}/"
-            f"{self.config.config['connection']['database']}",
+            f"{engine}{self.config['connection']['username']}:"
+            f"{self.config['connection']['password']}@"
+            f"{self.config['connection']['host']}:"
+            f"{self.config['connection']['port']}/"
+            f"{self.config['connection']['database']}",
             echo=False,
             future=True,
         )
@@ -74,9 +73,9 @@ class Database:
                     )
                     for column in columns:
                         if (
-                            not self.config.config["limits"]["select_columns"]
+                            not self.config["limits"]["select_columns"]
                             or column["column_name"]
-                            in self.config.config["limits"]["select_columns"]
+                            in self.config["limits"]["select_columns"]
                         ):
                             table_columns.append(
                                 TableColumn(
@@ -131,7 +130,7 @@ class Database:
                 postgresql_readonly=True, postgresql_deferrable=True
             )
 
-            if not set(self.config.config["limits"]["select_columns"]).issubset(
+            if not set(self.config["limits"]["select_columns"]).issubset(
                 [column.name for column in table.columns]
             ):
                 return []
@@ -139,11 +138,11 @@ class Database:
             with conn.begin():
                 select = (
                     "*"
-                    if not self.config.config["limits"]["select_columns"]
-                    else ",".join(self.config.config["limits"]["select_columns"])
+                    if not self.config["limits"]["select_columns"]
+                    else ",".join(self.config["limits"]["select_columns"])
                 )
 
-                if self.config.config["debug"]["enabled"]:
+                if self.config["debug"]["enabled"]:
                     self.console.print(
                         f"[cyan]DEBUG: Running 'SELECT {select} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
                     )
