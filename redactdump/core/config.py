@@ -1,6 +1,6 @@
 import configargparse
-from schema import Optional, Schema, SchemaError
 import yaml
+from schema import Optional, Schema, SchemaError
 
 
 class Config:
@@ -27,59 +27,59 @@ class Config:
         Returns:
             dict: Config dictionary
         """
-        config_schema = Schema(
-            {
-                "connection": {
-                    "type": str,
-                    "host": str,
-                    "port": int,
-                    "database": str,
-                    Optional("username"): str,
-                    Optional("password"): str,
+        config_schema = Schema({
+            "connection": {
+                "type": str,
+                "host": str,
+                "port": int,
+                "database": str,
+                Optional("username"): str,
+                Optional("password"): str,
+            },
+            Optional("limits"): {
+                Optional("max_rows_per_table"): int,
+                Optional("select_columns"): list,
+            },
+            Optional("performance"): {
+                Optional("rows_per_request"): int
+            },
+            Optional("debug"): {
+                "enabled": bool
+            },
+            "redact": {
+                Optional("columns"): {
+                    str: [{
+                        "name":
+                        str,
+                        "replacement":
+                        lambda r: True
+                        if r is None or type(r) is str else False,
+                    }]
                 },
-                Optional("limits"): {
-                    Optional("max_rows_per_table"): int,
-                    Optional("select_columns"): list,
+                Optional("patterns"): {
+                    Optional("column"): [{
+                        "pattern":
+                        str,
+                        "replacement":
+                        lambda r: True
+                        if r is None or type(r) is str else False,
+                    }],
+                    Optional("data"): [{
+                        "pattern":
+                        str,
+                        "replacement":
+                        lambda r: True
+                        if r is None or type(r) is str else False,
+                    }],
                 },
-                Optional("performance"): {Optional("rows_per_request"): int},
-                Optional("debug"): {"enabled": bool},
-                "redact": {
-                    Optional("columns"): {
-                        str: [
-                            {
-                                "name": str,
-                                "replacement": lambda r: True
-                                if r is None or type(r) is str
-                                else False,
-                            }
-                        ]
-                    },
-                    Optional("patterns"): {
-                        Optional("column"): [
-                            {
-                                "pattern": str,
-                                "replacement": lambda r: True
-                                if r is None or type(r) is str
-                                else False,
-                            }
-                        ],
-                        Optional("data"): [
-                            {
-                                "pattern": str,
-                                "replacement": lambda r: True
-                                if r is None or type(r) is str
-                                else False,
-                            }
-                        ],
-                    },
-                },
-                "output": {
-                    "type": lambda t: True if t in ["file", "multi_file"] else False,
-                    "location": str,
-                    Optional("naming"): str,
-                },
-            }
-        )
+            },
+            "output": {
+                "type": lambda t: True
+                if t in ["file", "multi_file"] else False,
+                "location": str,
+                Optional("naming"): str,
+            },
+        })
 
         with open(self.config_file, "r") as f:
             config = yaml.safe_load(f)

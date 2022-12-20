@@ -24,10 +24,8 @@ class Database:
 
         self.redactor = Redactor(config)
 
-        if (
-            self.config.config["connection"]["type"] == "postgresql"
-            or self.config.config["connection"]["type"] == "pgsql"
-        ):
+        if (self.config.config["connection"]["type"] == "postgresql"
+                or self.config.config["connection"]["type"] == "pgsql"):
             engine = "postgresql://"
         elif self.config.config["connection"]["type"] == "mysql":
             engine = "mysql+pymysql://"
@@ -53,16 +51,13 @@ class Database:
         """
         tables: List[Table] = []
         with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
+            conn = conn.execution_options(postgresql_readonly=True,
+                                          postgresql_deferrable=True)
             with conn.begin():
                 result = conn.execute(
                     text(
                         "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND "
-                        "table_schema='public' "
-                    )
-                )
+                        "table_schema='public' "))
 
                 for table in result:
                     table_columns = []
@@ -70,22 +65,18 @@ class Database:
                         text(
                             f"SELECT column_name, column_default, is_nullable, data_type FROM "
                             f"information_schema.columns WHERE table_name = '{table[0]}'"
-                        )
-                    )
+                        ))
                     for column in columns:
-                        if (
-                            not self.config.config["limits"]["select_columns"]
-                            or column["column_name"]
-                            in self.config.config["limits"]["select_columns"]
-                        ):
+                        if (not self.config.config["limits"]["select_columns"]
+                                or column["column_name"] in self.config.
+                                config["limits"]["select_columns"]):
                             table_columns.append(
                                 TableColumn(
                                     column["column_name"],
                                     column["data_type"],
                                     column["is_nullable"],
                                     column["column_default"],
-                                )
-                            )
+                                ))
 
                     tables.append(Table(table[0], table_columns))
         return tables
@@ -101,19 +92,18 @@ class Database:
             int: The number of rows in the table.
         """
         with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
+            conn = conn.execution_options(postgresql_readonly=True,
+                                          postgresql_deferrable=True)
             with conn.begin():
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table.name}"))
+                result = conn.execute(
+                    text(f"SELECT COUNT(*) FROM {table.name}"))
 
                 for item in result:
                     return item[0]
         return 0
 
-    def get_data(
-        self, table: Table, offset: int, limit: int
-    ) -> list[list[TableColumn]]:
+    def get_data(self, table: Table, offset: int,
+                 limit: int) -> list[list[TableColumn]]:
         """
         Get data from a table.
 
@@ -127,21 +117,19 @@ class Database:
         """
         data = []
         with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
+            conn = conn.execution_options(postgresql_readonly=True,
+                                          postgresql_deferrable=True)
 
-            if not set(self.config.config["limits"]["select_columns"]).issubset(
-                [column.name for column in table.columns]
-            ):
+            if not set(
+                    self.config.config["limits"]["select_columns"]).issubset(
+                        [column.name for column in table.columns]):
                 return []
 
             with conn.begin():
-                select = (
-                    "*"
-                    if not self.config.config["limits"]["select_columns"]
-                    else ",".join(self.config.config["limits"]["select_columns"])
-                )
+                select = ("*"
+                          if not self.config.config["limits"]["select_columns"]
+                          else ",".join(
+                              self.config.config["limits"]["select_columns"]))
 
                 if self.config.config["debug"]["enabled"]:
                     self.console.print(
@@ -151,17 +139,17 @@ class Database:
                 result = conn.execute(
                     text(
                         f"SELECT {select} FROM {table.name} OFFSET {offset} LIMIT {limit}"
-                    )
-                )
+                    ))
                 records = [dict(zip(row.keys(), row)) for row in result]
                 for item in records:
                     if self.redactor.data_rules or self.redactor.column_rules:
-                        modified_column = self.redactor.redact(item, table.columns)
+                        modified_column = self.redactor.redact(
+                            item, table.columns)
                     else:
                         for key, value in item.items():
                             column = next(
-                                (x for x in table.columns if x.name == key), None
-                            )
+                                (x for x in table.columns if x.name == key),
+                                None)
                             if column is not None:
                                 column.value = value
                         modified_column = table.columns

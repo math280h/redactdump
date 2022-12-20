@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 import os
+from datetime import datetime, timezone
 from typing import List, Union
 
 from rich.console import Console
@@ -27,7 +27,8 @@ class File:
     def create_output_locations(self) -> None:
         """Create output locations."""
         if self.config.args.debug:
-            self.console.print("[cyan]DEBUG: Checking output locations...[/cyan]")
+            self.console.print(
+                "[cyan]DEBUG: Checking output locations...[/cyan]")
 
         output = self.config.config["output"]
         if output["type"] == "file":
@@ -68,19 +69,16 @@ class File:
         """
         time = datetime.now(timezone.utc)
         if "naming" in output:
-            naming = (
-                output["naming"]
-                .replace("[timestamp]", time.strftime("%Y-%m-%d-%H-%M-%S"))
-                .replace("[table_name]", table.name)
-            )
+            naming = (output["naming"].replace(
+                "[timestamp]", time.strftime("%Y-%m-%d-%H-%M-%S")).replace(
+                    "[table_name]", table.name))
             name = f"{naming}.sql"
         else:
             name = f"{table.name}-{time.strftime('%Y-%m-%d-%H-%M-%S')}.sql"
         return name
 
-    def write_to_file(
-        self, table: Table, rows: List[List[TableColumn]]
-    ) -> Union[str, None]:
+    def write_to_file(self, table: Table,
+                      rows: List[List[TableColumn]]) -> Union[str, None]:
         """
         Write data to file.
 
@@ -99,23 +97,20 @@ class File:
 
                     values = []
                     for column in row:
-                        if (
-                            column.data_type == "bigint"
-                            or column.data_type == "integer"
-                            or column.data_type == "smallint"
-                            or column.data_type == "double precision"
-                            or column.data_type == "numeric"
-                        ):
+                        if (column.data_type == "bigint"
+                                or column.data_type == "integer"
+                                or column.data_type == "smallint"
+                                or column.data_type == "double precision"
+                                or column.data_type == "numeric"):
                             values.append(str(column.value))
-                        elif (
-                            column.data_type == "bit"
-                            or column.data_type == "bit varying"
-                        ):
+                        elif (column.data_type == "bit"
+                              or column.data_type == "bit varying"):
                             values.append(str(f"b'{column.value}'"))
                         else:
                             values.append(str(f"'{column.value}'"))
 
-                    columns = '"' + '", "'.join([column.name for column in row]) + '"'
+                    columns = '"' + '", "'.join(
+                        [column.name for column in row]) + '"'
                     file.write(
                         f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});\n"
                     )
