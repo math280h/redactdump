@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 import re
+import sys
 from typing import Any, List, Pattern, Union
 
 from faker import Faker
 
-from redactdump.core.config import Config
 from redactdump.core.models import TableColumn
 
 
@@ -19,7 +19,7 @@ class CustomRule:
 class Redactor:
     """Redactor class."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: dict) -> None:
         """
         Initialize Redactor class.
 
@@ -36,18 +36,20 @@ class Redactor:
     def load_rules(self) -> None:
         """Load redaction rules."""
         if (
-            "data" not in self.config.config["redact"]["patterns"]
-            and "column" not in self.config.config["redact"]["patterns"]["data"]
+            "data" not in self.config["redact"]["patterns"]
+            and "column" not in self.config["redact"]["patterns"]["data"]
         ):
             self.data_rules = []
             self.column_rules = []
         else:
-            for category in self.config.config["redact"]["patterns"]:
-                for pattern in self.config.config["redact"]["patterns"][category]:
+            for category in self.config["redact"]["patterns"]:
+                for pattern in self.config["redact"]["patterns"][category]:
                     try:
                         getattr(self.fake, pattern["replacement"])
                     except AttributeError:
-                        exit(f"{pattern['replacement']} is not a valid replacement.")
+                        sys.exit(
+                            f"{pattern['replacement']} is not a valid replacement."
+                        )
 
                     if category == "data":
                         self.data_rules.append(

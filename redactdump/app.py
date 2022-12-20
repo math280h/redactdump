@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import sys
 from typing import Optional
 
 import configargparse
@@ -70,22 +71,22 @@ class RedactDump:
         )
 
         self.args = parser.parse_args()
-        self.config = Config(self.args)
+        self.config = Config(self.args).load_config()
 
-        if "username" not in self.config.config["connection"]:
+        if "username" not in self.config["connection"]:
             if self.args.user is None:
                 self.console.print(
                     "[red]Connection username is required, either via config or arguments[/red]"
                 )
-                exit(1)
-            self.config.config["connection"]["username"] = self.args.user
-        if "password" not in self.config.config["connection"]:
+                sys.exit(1)
+            self.config["connection"]["username"] = self.args.user
+        if "password" not in self.config["connection"]:
             if self.args.password is None:
                 self.console.print(
                     "[red]Connection password is required, either via config or arguments[/red]"
                 )
-                exit(1)
-            self.config.config["connection"]["password"] = self.args.password
+                sys.exit(1)
+            self.config["connection"]["password"] = self.args.password
 
         self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
@@ -103,17 +104,17 @@ class RedactDump:
 
         row_count = (
             self.database.count_rows(table)
-            if "limits" not in self.config.config
-            or "max_rows_per_table" not in self.config.config["limits"]
-            else int(self.config.config["limits"]["max_rows_per_table"])
+            if "limits" not in self.config
+            or "max_rows_per_table" not in self.config["limits"]
+            else int(self.config["limits"]["max_rows_per_table"])
         )
 
         last_num = 0
         step = (
             100
-            if "performance" not in self.config.config
-            or "rows_per_request" not in self.config.config["performance"]
-            else int(self.config.config["performance"]["rows_per_request"])
+            if "performance" not in self.config
+            or "rows_per_request" not in self.config["performance"]
+            else int(self.config["performance"]["rows_per_request"])
         )
         location = None
 
@@ -133,15 +134,15 @@ class RedactDump:
         """Run the redactdump application."""
         tables = self.database.get_tables()
 
-        if self.config.config["output"]["type"] == "file":
+        if self.config["output"]["type"] == "file":
             self.console.print(
                 "[red]Single file not supported with multiple tables. (Maybe later...)[/red]"
             )
-            exit(1)
+            sys.exit(1)
 
         if not tables:
             self.console.print("[red]No tables found[/red]")
-            exit(1)
+            sys.exit(1)
 
         with ThreadPoolExecutor(max_workers=self.args.max_workers) as exe:
             result = exe.map(self.dump, tables)
@@ -156,8 +157,8 @@ class RedactDump:
 
         row_count_limited = (
             ""
-            if "limits" not in self.config.config
-            or "max_rows_per_table" not in self.config.config["limits"]
+            if "limits" not in self.config
+            or "max_rows_per_table" not in self.config["limits"]
             else " (Limited via config)"
         )
 
