@@ -15,7 +15,6 @@ class Config:
         """
         self.args = args
         self.config_file = args.config
-        self.config = self.load_config()
 
     def load_config(self) -> dict:
         """
@@ -48,9 +47,7 @@ class Config:
                         str: [
                             {
                                 "name": str,
-                                "replacement": lambda r: True
-                                if r is None or type(r) is str
-                                else False,
+                                "replacement": lambda r: r is None or type(r) is str,
                             }
                         ]
                     },
@@ -58,23 +55,19 @@ class Config:
                         Optional("column"): [
                             {
                                 "pattern": str,
-                                "replacement": lambda r: True
-                                if r is None or type(r) is str
-                                else False,
+                                "replacement": lambda r: r is None or type(r) is str,
                             }
                         ],
                         Optional("data"): [
                             {
                                 "pattern": str,
-                                "replacement": lambda r: True
-                                if r is None or type(r) is str
-                                else False,
+                                "replacement": lambda r: r is None or type(r) is str,
                             }
                         ],
                     },
                 },
                 "output": {
-                    "type": lambda t: True if t in ["file", "multi_file"] else False,
+                    "type": lambda t: t in ["file", "multi_file"],
                     "location": str,
                     Optional("naming"): str,
                 },
