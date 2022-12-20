@@ -147,7 +147,8 @@ class Database:
 
                 if self.config["debug"]["enabled"]:
                     self.console.print(
-                        f"[cyan]DEBUG: Running 'SELECT {select_value} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
+                        f"[cyan]DEBUG: Running 'SELECT {select_value} FROM "
+                        f"{table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
                     )
 
                 result = conn.execute(
