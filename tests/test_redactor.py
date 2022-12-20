@@ -1,6 +1,6 @@
 from configargparse import Namespace
 
-from redactdump.core import Config
+from redactdump.core.config import Config
 from redactdump.core.models import TableColumn
 from redactdump.core.redactor import Redactor
 

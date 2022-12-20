@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import re
+from sys import exit
 from typing import Any, List, Pattern, Union
 
 from faker import Faker
