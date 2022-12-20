@@ -1,7 +1,7 @@
 from typing import List
 
 from rich.console import Console
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, table as sql_table, text
 
 from redactdump.core.models import Table, TableColumn
 from redactdump.core.redactor import Redactor
@@ -67,9 +67,10 @@ class Database:
                     table_columns = []
                     columns = conn.execute(
                         text(
-                            f"SELECT column_name, column_default, is_nullable, data_type FROM "
-                            f"information_schema.columns WHERE table_name = '{table[0]}'"
-                        )
+                            "SELECT column_name, column_default, is_nullable, data_type FROM "
+                            "information_schema.columns WHERE table_name = :table_name"
+                        ),
+                        {"table_name": table[0]},
                     )
                     for column in columns:
                         if (
@@ -104,7 +105,9 @@ class Database:
                 postgresql_readonly=True, postgresql_deferrable=True
             )
             with conn.begin():
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table.name}"))
+                result = conn.execute(
+                    select(text("COUNT(*)")).select_from(sql_table(table.name))
+                )
 
                 for item in result:
                     return item[0]
@@ -136,7 +139,7 @@ class Database:
                 return []
 
             with conn.begin():
-                select = (
+                select_value = (
                     "*"
                     if not self.config["limits"]["select_columns"]
                     else ",".join(self.config["limits"]["select_columns"])
@@ -144,13 +147,14 @@ class Database:
 
                 if self.config["debug"]["enabled"]:
                     self.console.print(
-                        f"[cyan]DEBUG: Running 'SELECT {select} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
+                        f"[cyan]DEBUG: Running 'SELECT {select_value} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
                     )
 
                 result = conn.execute(
-                    text(
-                        f"SELECT {select} FROM {table.name} OFFSET {offset} LIMIT {limit}"
-                    )
+                    select(text(select_value))
+                    .offset(offset)
+                    .limit(limit)
+                    .select_from(sql_table(table.name))
                 )
                 records = [dict(zip(row.keys(), row)) for row in result]
                 for item in records:
