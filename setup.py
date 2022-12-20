@@ -1,11 +1,9 @@
-from distutils.core import setup
-
 import setuptools
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-setup(
+setuptools.setup(
     name="redactdump",
 
     version="0.3.1",
