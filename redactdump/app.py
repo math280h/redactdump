@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import sys
 from typing import Optional
 
 import configargparse
@@ -77,14 +78,14 @@ class RedactDump:
                 self.console.print(
                     "[red]Connection username is required, either via config or arguments[/red]"
                 )
-                exit(1)
+                sys.exit(1)
             self.config.config["connection"]["username"] = self.args.user
         if "password" not in self.config.config["connection"]:
             if self.args.password is None:
                 self.console.print(
                     "[red]Connection password is required, either via config or arguments[/red]"
                 )
-                exit(1)
+                sys.exit(1)
             self.config.config["connection"]["password"] = self.args.password
 
         self.database = Database(self.config, self.console)
@@ -137,11 +138,11 @@ class RedactDump:
             self.console.print(
                 "[red]Single file not supported with multiple tables. (Maybe later...)[/red]"
             )
-            exit(1)
+            sys.exit(1)
 
         if not tables:
             self.console.print("[red]No tables found[/red]")
-            exit(1)
+            sys.exit(1)
 
         with ThreadPoolExecutor(max_workers=self.args.max_workers) as exe:
             result = exe.map(self.dump, tables)

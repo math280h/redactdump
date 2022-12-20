@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import re
-from sys import exit
+import sys
 from typing import Any, List, Pattern, Union
 
 from faker import Faker
@@ -48,7 +48,7 @@ class Redactor:
                     try:
                         getattr(self.fake, pattern["replacement"])
                     except AttributeError:
-                        exit(f"{pattern['replacement']} is not a valid replacement.")
+                        sys.exit(f"{pattern['replacement']} is not a valid replacement.")
 
                     if category == "data":
                         self.data_rules.append(
