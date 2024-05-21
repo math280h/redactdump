@@ -28,7 +28,7 @@ setuptools.setup(
         'configargparse==1.5.3',
         'SQLAlchemy~=1.4.27',
         'psycopg2-binary==2.9.3',
-        'pymysql==1.0.2',
+        'pymysql==1.1.1',
         'faker==10.0.0'
     ],
 
