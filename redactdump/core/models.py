@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Union
+from typing import Any, List
 
 
 @dataclass
@@ -10,7 +10,7 @@ class TableColumn:
     data_type: str
     is_nullable: bool
     default: str
-    value: Union[str, None] = None
+    value: Any = None
 
 
 @dataclass

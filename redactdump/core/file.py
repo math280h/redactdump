@@ -1,6 +1,8 @@
 import os
+import re
+import threading
 from datetime import datetime, timezone
-from typing import List, Union
+from typing import List, Optional, Union
 
 from rich.console import Console
 
@@ -19,8 +21,34 @@ class File:
         """
         self.config = config
         self.console = console
+        self.lock = threading.Lock()
+
+        output = self.config["output"]
+        self.file_path: Optional[str] = self.resolve_file_path(output) if output["type"] == "file" else None
 
         self.create_output_locations()
+
+    @staticmethod
+    def resolve_file_path(output: dict) -> str:
+        """Resolve the path of the single output file.
+
+        Without a naming template the file is {location}.sql. With one, [timestamp]
+        is substituted and [table_name] dropped (a single file spans every table);
+        the templated name is placed in the directory of location.
+
+        Args:
+            output (dict): Output configuration.
+
+        Returns:
+            str: Path to the single output file.
+        """
+        if "naming" not in output:
+            return f"{output['location']}.sql"
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
+        name = output["naming"].replace("[table_name]", "").replace("[timestamp]", timestamp)
+        name = re.sub(r"([-_])[-_]+", r"\1", name).strip("-_")
+        directory = os.path.dirname(output["location"])
+        return os.path.join(directory, f"{name}.sql") if directory else f"{name}.sql"
 
     def create_output_locations(self) -> None:
         """Create output locations."""
@@ -28,15 +56,12 @@ class File:
             self.console.print("[cyan]DEBUG: Checking output locations...[/cyan]")
 
         output = self.config["output"]
-        if output["type"] == "file":
-            if not os.path.isfile(f"{output['location']}.sql"):
-                open(f"{output['location']}.sql", "a").close()
-                if self.config["debug"]["enabled"]:
-                    self.console.print(f"[cyan]DEBUG: Created file: {output['location']}.sql[/cyan]")
-            else:
-                # Emtpy file
-                if self.config["debug"]["enabled"]:
-                    self.console.print(f"[cyan]DEBUG: File already exists: {output['location']}.sql[/cyan]")
+        if output["type"] == "file" and self.file_path is not None:
+            os.makedirs(os.path.dirname(self.file_path) or ".", exist_ok=True)
+            with open(self.file_path, "w"):
+                pass
+            if self.config["debug"]["enabled"]:
+                self.console.print(f"[cyan]DEBUG: Created file: {self.file_path}[/cyan]")
         elif output["type"] == "multi_file" and not os.path.isdir(output["location"]):
             prev_folder = "."
             for folder in output["location"].split("/"):
@@ -73,6 +98,29 @@ class File:
             name = f"{table.name}-{time.strftime('%Y-%m-%d-%H-%M-%S')}.sql"
         return name
 
+    @staticmethod
+    def insert_statement(table: Table, row: List[TableColumn]) -> str:
+        """Build an INSERT statement for a single row.
+
+        Args:
+            table (Table): Table.
+            row (List[TableColumn]): Columns of the row.
+
+        Returns:
+            str: The INSERT statement.
+        """
+        values = []
+        for column in row:
+            if column.data_type in ["bigint", "integer", "smallint", "double precision", "numeric"]:
+                values.append(str(column.value))
+            elif column.data_type in ["bit", "bit varying"]:
+                values.append(f"b'{column.value}'")
+            else:
+                values.append(f"'{column.value}'")
+
+        columns = '"' + '", "'.join([column.name for column in row]) + '"'
+        return f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});"
+
     def write_to_file(self, table: Table, rows: List[List[TableColumn]]) -> Union[str, None]:
         """Write data to file.
 
@@ -88,22 +136,11 @@ class File:
             name = self.get_name(output, table)
             with open(f"{output['location']}/{name}", "a") as file:
                 for row in rows:
-                    values = []
-                    for column in row:
-                        if column.data_type in [
-                            "bigint",
-                            "integer",
-                            "smallint",
-                            "double precision",
-                            "numeric",
-                        ]:
-                            values.append(str(column.value))
-                        elif column.data_type in ["bit", "bit varying"]:
-                            values.append(str(f"b'{column.value}'"))
-                        else:
-                            values.append(str(f"'{column.value}'"))
-
-                    columns = '"' + '", "'.join([column.name for column in row]) + '"'
-                    file.write(f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});\n")
+                    file.write(f"{self.insert_statement(table, row)}\n")
             return name
-        return ""
+        if output["type"] == "file" and self.file_path is not None:
+            with self.lock, open(self.file_path, "a") as file:
+                for row in rows:
+                    file.write(f"{self.insert_statement(table, row)}\n")
+            return os.path.basename(self.file_path)
+        return None
