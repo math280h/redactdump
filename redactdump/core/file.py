@@ -8,6 +8,29 @@ from rich.console import Console
 
 from redactdump.core.models import Table, TableColumn
 
+NUMERIC_TYPES = frozenset({"bigint", "integer", "smallint", "double precision", "numeric"})
+BIT_TYPES = frozenset({"bit", "bit varying"})
+CAST_TYPES = frozenset(
+    {
+        "box",
+        "cidr",
+        "circle",
+        "inet",
+        "interval",
+        "line",
+        "lseg",
+        "macaddr",
+        "macaddr8",
+        "pg_lsn",
+        "pg_snapshot",
+        "point",
+        "polygon",
+        "tsquery",
+        "tsvector",
+        "txid_snapshot",
+    }
+)
+
 
 class File:
     """File class."""
@@ -99,6 +122,34 @@ class File:
         return name
 
     @staticmethod
+    def format_value(column: TableColumn) -> str:
+        """Render a column value as a PostgreSQL literal.
+
+        PostgreSQL-specific types are emitted with an explicit ::type cast so the
+        value is unambiguous, and bytea is rendered as a hex literal.
+
+        Args:
+            column (TableColumn): Column with its value and data type.
+
+        Returns:
+            str: The SQL literal.
+        """
+        value = column.value
+        data_type = column.data_type
+        if value is None:
+            return "NULL"
+        if data_type in NUMERIC_TYPES:
+            return str(value)
+        if data_type in BIT_TYPES:
+            return f"b'{value}'"
+        if data_type == "bytea" and isinstance(value, (bytes, bytearray, memoryview)):
+            return f"'\\x{bytes(value).hex()}'::bytea"
+        literal = str(value).replace("'", "''")
+        if data_type in CAST_TYPES:
+            return f"'{literal}'::{data_type}"
+        return f"'{literal}'"
+
+    @staticmethod
     def insert_statement(table: Table, row: List[TableColumn]) -> str:
         """Build an INSERT statement for a single row.
 
@@ -109,16 +160,8 @@ class File:
         Returns:
             str: The INSERT statement.
         """
-        values = []
-        for column in row:
-            if column.data_type in ["bigint", "integer", "smallint", "double precision", "numeric"]:
-                values.append(str(column.value))
-            elif column.data_type in ["bit", "bit varying"]:
-                values.append(f"b'{column.value}'")
-            else:
-                values.append(f"'{column.value}'")
-
-        columns = '"' + '", "'.join([column.name for column in row]) + '"'
+        values = [File.format_value(column) for column in row]
+        columns = ", ".join(f'"{column.name}"' for column in row)
         return f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});"
 
     def write_to_file(self, table: Table, rows: List[List[TableColumn]]) -> Union[str, None]:
