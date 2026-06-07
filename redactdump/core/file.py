@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 import os
+from datetime import datetime, timezone
 from typing import List, Union
 
 from rich.console import Console
@@ -11,8 +11,7 @@ class File:
     """File class."""
 
     def __init__(self, config: dict, console: Console) -> None:
-        """
-        Initialize the File class.
+        """Initialize the File class.
 
         Args:
             config (Config): Config object.
@@ -33,15 +32,11 @@ class File:
             if not os.path.isfile(f"{output['location']}.sql"):
                 open(f"{output['location']}.sql", "a").close()
                 if self.config["debug"]["enabled"]:
-                    self.console.print(
-                        f"[cyan]DEBUG: Created file: {output['location']}.sql[/cyan]"
-                    )
+                    self.console.print(f"[cyan]DEBUG: Created file: {output['location']}.sql[/cyan]")
             else:
                 # Emtpy file
                 if self.config["debug"]["enabled"]:
-                    self.console.print(
-                        f"[cyan]DEBUG: File already exists: {output['location']}.sql[/cyan]"
-                    )
+                    self.console.print(f"[cyan]DEBUG: File already exists: {output['location']}.sql[/cyan]")
         elif output["type"] == "multi_file" and not os.path.isdir(output["location"]):
             prev_folder = "."
             for folder in output["location"].split("/"):
@@ -50,17 +45,14 @@ class File:
                     prev_folder = folder
 
             if self.config["debug"]["enabled"]:
-                self.console.print(
-                    f"[cyan]DEBUG: Created directory: {output['location']}[/cyan]"
-                )
+                self.console.print(f"[cyan]DEBUG: Created directory: {output['location']}[/cyan]")
 
         if self.config["debug"]["enabled"]:
             self.console.print()
 
     @staticmethod
     def get_name(output: dict, table: Table) -> str:
-        """
-        Get the formatted name of the file.
+        """Get the formatted name of the file.
 
         Args:
             output (dict): Output configuration.
@@ -81,11 +73,8 @@ class File:
             name = f"{table.name}-{time.strftime('%Y-%m-%d-%H-%M-%S')}.sql"
         return name
 
-    def write_to_file(
-        self, table: Table, rows: List[List[TableColumn]]
-    ) -> Union[str, None]:
-        """
-        Write data to file.
+    def write_to_file(self, table: Table, rows: List[List[TableColumn]]) -> Union[str, None]:
+        """Write data to file.
 
         Args:
             table (Table): Table name.
@@ -99,7 +88,6 @@ class File:
             name = self.get_name(output, table)
             with open(f"{output['location']}/{name}", "a") as file:
                 for row in rows:
-
                     values = []
                     for column in row:
                         if column.data_type in [
@@ -116,8 +104,6 @@ class File:
                             values.append(str(f"'{column.value}'"))
 
                     columns = '"' + '", "'.join([column.name for column in row]) + '"'
-                    file.write(
-                        f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});\n"
-                    )
+                    file.write(f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});\n")
             return name
         return ""

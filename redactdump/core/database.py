@@ -1,7 +1,8 @@
 from typing import List
 
 from rich.console import Console
-from sqlalchemy import create_engine, select, table as sql_table, text
+from sqlalchemy import create_engine, select, text
+from sqlalchemy import table as sql_table
 
 from redactdump.core.models import Table, TableColumn
 from redactdump.core.redactor import Redactor
@@ -11,8 +12,7 @@ class Database:
     """Database class for RedactDump."""
 
     def __init__(self, config: dict, console: Console) -> None:
-        """
-        Initialize the database class.
+        """Initialize the database class.
 
         Args:
             config (dict): The configuration.
@@ -23,10 +23,7 @@ class Database:
 
         self.redactor = Redactor(config)
 
-        if (
-            self.config["connection"]["type"] == "postgresql"
-            or self.config["connection"]["type"] == "pgsql"
-        ):
+        if self.config["connection"]["type"] == "postgresql" or self.config["connection"]["type"] == "pgsql":
             engine = "postgresql://"
         elif self.config["connection"]["type"] == "mysql":
             engine = "mysql+pymysql://"
@@ -40,21 +37,17 @@ class Database:
             f"{self.config['connection']['port']}/"
             f"{self.config['connection']['database']}",
             echo=False,
-            future=True,
         )
 
     def get_tables(self) -> List[Table]:
-        """
-        Get a list of tables.
+        """Get a list of tables.
 
         Returns:
             List[str]: A list of tables.
         """
         tables: List[Table] = []
         with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
+            conn = conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
             with conn.begin():
                 result = conn.execute(
                     text(
@@ -75,15 +68,14 @@ class Database:
                     for column in columns:
                         if (
                             not self.config["limits"]["select_columns"]
-                            or column["column_name"]
-                            in self.config["limits"]["select_columns"]
+                            or column.column_name in self.config["limits"]["select_columns"]
                         ):
                             table_columns.append(
                                 TableColumn(
-                                    column["column_name"],
-                                    column["data_type"],
-                                    column["is_nullable"],
-                                    column["column_default"],
+                                    column.column_name,
+                                    column.data_type,
+                                    column.is_nullable,
+                                    column.column_default,
                                 )
                             )
 
@@ -91,8 +83,7 @@ class Database:
         return tables
 
     def count_rows(self, table: Table) -> int:
-        """
-        Get the number of rows in a table.
+        """Get the number of rows in a table.
 
         Args:
             table (Table): The table name.
@@ -101,23 +92,16 @@ class Database:
             int: The number of rows in the table.
         """
         with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
+            conn = conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
             with conn.begin():
-                result = conn.execute(
-                    select(text("COUNT(*)")).select_from(sql_table(table.name))
-                )
+                result = conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name)))
 
                 for item in result:
                     return item[0]
         return 0
 
-    def get_data(
-        self, table: Table, offset: int, limit: int
-    ) -> list[list[TableColumn]]:
-        """
-        Get data from a table.
+    def get_data(self, table: Table, offset: int, limit: int) -> list[list[TableColumn]]:
+        """Get data from a table.
 
         Args:
             table (Table): The table name.
@@ -129,13 +113,9 @@ class Database:
         """
         data = []
         with self.engine.connect() as conn:
-            conn = conn.execution_options(
-                postgresql_readonly=True, postgresql_deferrable=True
-            )
+            conn = conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
 
-            if not set(self.config["limits"]["select_columns"]).issubset(
-                [column.name for column in table.columns]
-            ):
+            if not set(self.config["limits"]["select_columns"]).issubset([column.name for column in table.columns]):
                 return []
 
             with conn.begin():
@@ -152,20 +132,15 @@ class Database:
                     )
 
                 result = conn.execute(
-                    select(text(select_value))
-                    .offset(offset)
-                    .limit(limit)
-                    .select_from(sql_table(table.name))
+                    select(text(select_value)).offset(offset).limit(limit).select_from(sql_table(table.name))
                 )
-                records = [dict(zip(row.keys(), row)) for row in result]
+                records = [dict(row._mapping) for row in result]
                 for item in records:
                     if self.redactor.data_rules or self.redactor.column_rules:
                         modified_column = self.redactor.redact(item, table.columns)
                     else:
                         for key, value in item.items():
-                            column = next(
-                                (x for x in table.columns if x.name == key), None
-                            )
+                            column = next((x for x in table.columns if x.name == key), None)
                             if column is not None:
                                 column.value = value
                         modified_column = table.columns

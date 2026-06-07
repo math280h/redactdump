@@ -5,8 +5,6 @@
 <p align="center">
   <img alt="type-lint badge" src="https://github.com/math280h/redactdump/actions/workflows/type-lint.yaml/badge.svg"/>
   <img alt="test badge" src="https://github.com/math280h/redactdump/actions/workflows/test.yaml/badge.svg"/>
-  <a href="https://deepsource.io/gh/math280h/redactdump/?ref=repository-badge}" target="_blank"><img alt="DeepSource" title="DeepSource" src="https://deepsource.io/gh/math280h/redactdump.svg/?label=active+issues&show_trend=true&token=zl4gwpMEiRHT9iPmjcCF0pWj"/></a>
-  <a href="https://deepsource.io/gh/math280h/redactdump/?ref=repository-badge}" target="_blank"><img alt="DeepSource" title="DeepSource" src="https://deepsource.io/gh/math280h/redactdump.svg/?label=resolved+issues&show_trend=true&token=zl4gwpMEiRHT9iPmjcCF0pWj"/></a>
 </p>
 
 Easily create database dumps with support for redacting data (And replacing that data with valid random values).

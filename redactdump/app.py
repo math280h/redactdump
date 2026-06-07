@@ -1,16 +1,17 @@
-from concurrent.futures import ThreadPoolExecutor
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import configargparse
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
+from rich.table import Table as RichTable
 from rich.text import Text
 
 from redactdump.core.config import Config
 from redactdump.core.database import Database
 from redactdump.core.file import File
+from redactdump.core.models import Table
 
 
 class RedactDump:
@@ -30,9 +31,7 @@ class RedactDump:
         )
         self.console.print()
 
-        parser = configargparse.ArgParser(
-            description="redactdump", usage="redactdump [-h] -c CONFIG"
-        )
+        parser = configargparse.ArgParser(description="redactdump", usage="redactdump [-h] -c CONFIG")
         parser.add_argument(
             "-c",
             "--config",
@@ -75,16 +74,12 @@ class RedactDump:
 
         if "username" not in self.config["connection"]:
             if self.args.user is None:
-                self.console.print(
-                    "[red]Connection username is required, either via config or arguments[/red]"
-                )
+                self.console.print("[red]Connection username is required, either via config or arguments[/red]")
                 sys.exit(1)
             self.config["connection"]["username"] = self.args.user
         if "password" not in self.config["connection"]:
             if self.args.password is None:
-                self.console.print(
-                    "[red]Connection password is required, either via config or arguments[/red]"
-                )
+                self.console.print("[red]Connection password is required, either via config or arguments[/red]")
                 sys.exit(1)
             self.config["connection"]["password"] = self.args.password
 
@@ -92,28 +87,23 @@ class RedactDump:
         self.file = File(self.config, self.console)
 
     def dump(self, table: Table) -> tuple[Table, int, Optional[str]]:
-        """
-        Dump a table to a file.
+        """Dump a table to a file.
 
         Args:
             table (Table): Table name.
         """
-        self.console.print(
-            f":construction: [blue]Working on table:[/blue] {table.name}"
-        )
+        self.console.print(f":construction: [blue]Working on table:[/blue] {table.name}")
 
         row_count = (
             self.database.count_rows(table)
-            if "limits" not in self.config
-            or "max_rows_per_table" not in self.config["limits"]
+            if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
             else int(self.config["limits"]["max_rows_per_table"])
         )
 
         last_num = 0
         step = (
             100
-            if "performance" not in self.config
-            or "rows_per_request" not in self.config["performance"]
+            if "performance" not in self.config or "rows_per_request" not in self.config["performance"]
             else int(self.config["performance"]["rows_per_request"])
         )
         location = None
@@ -123,9 +113,7 @@ class RedactDump:
                 continue
 
             limit = step if x + step < row_count else step + row_count - x
-            location = self.file.write_to_file(
-                table, self.database.get_data(table, last_num, limit)
-            )
+            location = self.file.write_to_file(table, self.database.get_data(table, last_num, limit))
             last_num = x
 
         return table, row_count, location
@@ -135,9 +123,7 @@ class RedactDump:
         tables = self.database.get_tables()
 
         if self.config["output"]["type"] == "file":
-            self.console.print(
-                "[red]Single file not supported with multiple tables. (Maybe later...)[/red]"
-            )
+            self.console.print("[red]Single file not supported with multiple tables. (Maybe later...)[/red]")
             sys.exit(1)
 
         if not tables:
@@ -148,7 +134,7 @@ class RedactDump:
             result = exe.map(self.dump, tables)
 
         self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
-        table = Table()
+        table = RichTable()
         table.add_column("Name", no_wrap=True)
         table.add_column("Row Count", no_wrap=True)
         table.add_column("Output", no_wrap=True)
@@ -157,8 +143,7 @@ class RedactDump:
 
         row_count_limited = (
             ""
-            if "limits" not in self.config
-            or "max_rows_per_table" not in self.config["limits"]
+            if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
             else " (Limited via config)"
         )
 

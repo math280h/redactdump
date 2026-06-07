@@ -1,6 +1,6 @@
-from dataclasses import dataclass
 import re
 import sys
+from dataclasses import dataclass
 from typing import Any, List, Pattern, Union
 
 from faker import Faker
@@ -20,8 +20,7 @@ class Redactor:
     """Redactor class."""
 
     def __init__(self, config: dict) -> None:
-        """
-        Initialize Redactor class.
+        """Initialize Redactor class.
 
         Args:
             config (Config): Config object.
@@ -47,26 +46,15 @@ class Redactor:
                     try:
                         getattr(self.fake, pattern["replacement"])
                     except AttributeError:
-                        sys.exit(
-                            f"{pattern['replacement']} is not a valid replacement."
-                        )
+                        sys.exit(f"{pattern['replacement']} is not a valid replacement.")
 
                     if category == "data":
-                        self.data_rules.append(
-                            CustomRule(
-                                pattern["replacement"], re.compile(pattern["pattern"])
-                            )
-                        )
+                        self.data_rules.append(CustomRule(pattern["replacement"], re.compile(pattern["pattern"])))
                     elif category == "column":
-                        self.column_rules.append(
-                            CustomRule(
-                                pattern["replacement"], re.compile(pattern["pattern"])
-                            )
-                        )
+                        self.column_rules.append(CustomRule(pattern["replacement"], re.compile(pattern["pattern"])))
 
     def get_replacement(self, replacement: str) -> Union[str, Any]:
-        """
-        Get replacement value.
+        """Get replacement value.
 
         Args:
             replacement (str): Replacement.
@@ -78,8 +66,7 @@ class Redactor:
         return "NULL"
 
     def redact(self, data: dict, columns: List[TableColumn]) -> list[TableColumn]:
-        """
-        Redact data.
+        """Redact data.
 
         Args:
             data (dict): Data to redact.
@@ -91,10 +78,7 @@ class Redactor:
         columns_redacted = []
         for rule in self.column_rules:
             for column in [
-                column
-                for column in columns
-                if rule.pattern.search(column.name)
-                and column.name not in columns_redacted
+                column for column in columns if rule.pattern.search(column.name) and column.name not in columns_redacted
             ]:
                 column.value = self.get_replacement(rule.replacement)
                 columns_redacted.append(column.name)

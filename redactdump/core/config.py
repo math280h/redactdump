@@ -1,14 +1,13 @@
 import configargparse
-from schema import Optional, Schema, SchemaError
 import yaml
+from schema import Optional, Schema, SchemaError
 
 
 class Config:
     """Config class for redactdump."""
 
     def __init__(self, args: configargparse.Namespace) -> None:
-        """
-        Initializes config object.
+        """Initializes config object.
 
         Args:
             args (configargparse.Namespace): Parsed arguments from argparse.
@@ -17,8 +16,7 @@ class Config:
         self.config_file = args.config
 
     def load_config(self) -> dict:
-        """
-        Loads and validates config.
+        """Loads and validates config.
 
         Raises:
             SchemaError: If config is invalid.

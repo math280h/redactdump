@@ -8,15 +8,23 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-    - name: Initialize Nox
-      uses: excitedleigh/setup-nox@v2.0.0
+    - name: Install uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-    - name: Runs nox
-      run: nox
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Ruff lint
+      run: uv run ruff check .
+
+    - name: Ruff format
+      run: uv run ruff format --check .
+
+    - name: Type check
+      run: uv run ty check redactdump tests

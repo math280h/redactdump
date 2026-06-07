@@ -28,7 +28,6 @@ def test_redaction() -> None:
     ]
 
     for idx, item in enumerate(data):
-
         if redactor.data_rules or redactor.column_rules:
             results = redactor.redact(
                 item,
