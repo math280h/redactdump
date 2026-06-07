@@ -152,24 +152,6 @@ INSERT INTO table_name VALUES (99, 'Robin Jefferson');
 
 </details>
 
-## Known limitations
+## Data types
 
-### Data types not supported
-
-* box
-* bytea
-* inet
-* interval
-* circle
-* cidr
-* line
-* lseg
-* macaddr
-* macaddr8
-* pg_lsn
-* pg_snapshot
-* point
-* polygon
-* tsquery
-* tsvector
-* txid_snapshot
+PostgreSQL-specific types (`inet`, `cidr`, `macaddr`, `macaddr8`, `interval`, `point`, `line`, `lseg`, `box`, `circle`, `polygon`, `tsvector`, `tsquery`, `pg_lsn`, `pg_snapshot`, `txid_snapshot`) are exported with an explicit `::type` cast, and `bytea` is exported as a hex literal. Redacting one of these columns requires a replacement that produces a value valid for the type.

@@ -60,6 +60,63 @@ def test_single_file_naming_template(tmp_path: Path) -> None:
     assert "--" not in name
 
 
+def column(data_type: str, value: object) -> TableColumn:
+    """Build a column with the given data type and value."""
+    return TableColumn("c", data_type, True, "", value)
+
+
+def test_format_value_numeric_is_unquoted() -> None:
+    """Numeric types are emitted without quotes or casts."""
+    assert File.format_value(column("integer", 5)) == "5"
+    assert File.format_value(column("numeric", "1.50")) == "1.50"
+
+
+def test_format_value_bit() -> None:
+    """Bit strings keep the b'...' form."""
+    assert File.format_value(column("bit", "101")) == "b'101'"
+
+
+def test_format_value_plain_string_is_quoted() -> None:
+    """Unlisted types fall back to a plain quoted literal."""
+    assert File.format_value(column("character varying", "Alice")) == "'Alice'"
+
+
+def test_format_value_pg_types_get_explicit_cast() -> None:
+    """PostgreSQL-specific types are emitted with an explicit ::type cast."""
+    assert File.format_value(column("inet", "192.168.0.1")) == "'192.168.0.1'::inet"
+    assert File.format_value(column("point", "(1,2)")) == "'(1,2)'::point"
+    assert File.format_value(column("macaddr8", "08:00:2b:01:02:03:04:05")) == "'08:00:2b:01:02:03:04:05'::macaddr8"
+
+
+def test_format_value_bytea_is_hex_literal() -> None:
+    """Binary bytea values are rendered as a hex literal."""
+    assert File.format_value(column("bytea", memoryview(b"\xde\xad\xbe\xef"))) == "'\\xdeadbeef'::bytea"
+    assert File.format_value(column("bytea", b"\x01\x02")) == "'\\x0102'::bytea"
+
+
+def test_format_value_none_is_null() -> None:
+    """A None value becomes a SQL NULL for any type, not a quoted literal."""
+    assert File.format_value(column("character varying", None)) == "NULL"
+    assert File.format_value(column("inet", None)) == "NULL"
+    assert File.format_value(column("bytea", None)) == "NULL"
+
+
+def test_format_value_escapes_single_quotes() -> None:
+    """Single quotes in string and cast values are doubled."""
+    assert File.format_value(column("character varying", "O'Brien")) == "'O''Brien'"
+    assert File.format_value(column("tsvector", "a'b")) == "'a''b'::tsvector"
+
+
+def test_write_to_file_emits_cast_in_insert(tmp_path: Path) -> None:
+    """A cast type is rendered inside the full INSERT line written to disk."""
+    file = File(build_config(tmp_path / "dump"), Console())
+    row = [TableColumn("ip", "inet", True, "", "192.168.0.1")]
+    file.write_to_file(Table("hosts", []), [row])
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert content == "INSERT INTO hosts (\"ip\") VALUES ('192.168.0.1'::inet);\n"
+
+
 def test_resolve_file_path_drops_table_name_cleanly() -> None:
     """table_name is dropped for any template ordering without leaving stray separators."""
     for naming in ["dump-[table_name]-[timestamp]", "[table_name]-[timestamp]", "dump-[timestamp]-[table_name]"]:
