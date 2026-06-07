@@ -78,6 +78,13 @@ output:
   location: './output/'
 ````
 
+### Output types
+
+`output.type` controls how dumps are written:
+
+* `multi_file`: one `.sql` file per table inside `location` (a directory).
+* `file`: every table is written into a single file. Without `naming` the file is `{location}.sql`; with `naming` the templated name (with `[table_name]` dropped) is placed in the directory of `location`. The file is recreated on each run.
+
 ### Configuration Schema
 
 The configuration schema can be found [here](redactdump/core/config.py)

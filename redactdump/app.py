@@ -122,10 +122,6 @@ class RedactDump:
         """Run the redactdump application."""
         tables = self.database.get_tables()
 
-        if self.config["output"]["type"] == "file":
-            self.console.print("[red]Single file not supported with multiple tables. (Maybe later...)[/red]")
-            sys.exit(1)
-
         if not tables:
             self.console.print("[red]No tables found[/red]")
             sys.exit(1)
