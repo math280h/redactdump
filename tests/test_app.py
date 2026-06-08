@@ -1,18 +1,17 @@
 """Tests for the RedactDump application orchestration and CLI wiring."""
 
 import asyncio
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, call
 
 import pytest
 import yaml
-from configargparse import Namespace
 from conftest import CapturingConsole, make_config
 from rich.console import Console
+from typer.testing import CliRunner
 
-from redactdump.app import RedactDump, start_application
+from redactdump.app import RedactDump, cli, start_application
 from redactdump.core.models import Table
 
 
@@ -29,7 +28,7 @@ def make_app(
     app.config = config
     app.database = database
     app.file = file
-    app.args = Namespace(max_workers=max_workers)
+    app.max_workers = max_workers
     return app
 
 
@@ -170,10 +169,9 @@ def test_init_exits_when_username_missing(tmp_path: Path, monkeypatch: pytest.Mo
     config_path = write_config_file(tmp_path)
     monkeypatch.setattr("redactdump.app.Database", MagicMock())
     monkeypatch.setattr("redactdump.app.File", MagicMock())
-    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path)])
 
     with pytest.raises(SystemExit):
-        RedactDump()
+        RedactDump(str(config_path), None, None)
 
 
 def test_init_exits_when_password_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -181,10 +179,9 @@ def test_init_exits_when_password_missing(tmp_path: Path, monkeypatch: pytest.Mo
     config_path = write_config_file(tmp_path)
     monkeypatch.setattr("redactdump.app.Database", MagicMock())
     monkeypatch.setattr("redactdump.app.File", MagicMock())
-    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path), "-u", "bob"])
 
     with pytest.raises(SystemExit):
-        RedactDump()
+        RedactDump(str(config_path), "bob", None)
 
 
 def test_init_credentials_from_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,9 +189,8 @@ def test_init_credentials_from_args(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     config_path = write_config_file(tmp_path)
     monkeypatch.setattr("redactdump.app.Database", MagicMock())
     monkeypatch.setattr("redactdump.app.File", MagicMock())
-    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path), "-u", "bob", "-p", "pw"])
 
-    app = RedactDump()
+    app = RedactDump(str(config_path), "bob", "pw")
 
     assert app.config["connection"]["username"] == "bob"
     assert app.config["connection"]["password"] == "pw"
@@ -205,16 +201,15 @@ def test_init_credentials_from_config(tmp_path: Path, monkeypatch: pytest.Monkey
     config_path = write_config_file(tmp_path, include_credentials=True)
     monkeypatch.setattr("redactdump.app.Database", MagicMock())
     monkeypatch.setattr("redactdump.app.File", MagicMock())
-    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path)])
 
-    app = RedactDump()
+    app = RedactDump(str(config_path), None, None)
 
     assert app.config["connection"]["username"] == "config_user"
     assert app.config["connection"]["password"] == "config_pass"
 
 
-def test_start_application_runs_the_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The entry point constructs the app and runs its async loop."""
+def test_cli_parses_options_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The typer CLI parses options, builds the app and runs its async loop."""
     ran = {"value": False}
 
     async def fake_run() -> None:
@@ -222,8 +217,30 @@ def test_start_application_runs_the_app(monkeypatch: pytest.MonkeyPatch) -> None
 
     instance = MagicMock()
     instance.run = fake_run
-    monkeypatch.setattr("redactdump.app.RedactDump", MagicMock(return_value=instance))
+    constructed = MagicMock(return_value=instance)
+    monkeypatch.setattr("redactdump.app.RedactDump", constructed)
 
+    result = CliRunner().invoke(cli, ["-c", "cfg.yaml", "-u", "bob", "-p", "pw", "--max-workers", "2"])
+
+    assert result.exit_code == 0
+    assert ran["value"] is True
+    constructed.assert_called_once_with("cfg.yaml", "bob", "pw", 2, False)
+
+
+def test_cli_requires_config() -> None:
+    """The config option is mandatory."""
+    result = CliRunner().invoke(cli, [])
+    assert result.exit_code != 0
+
+
+def test_start_application_invokes_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The entry point delegates to the typer app."""
+    called = {"value": False}
+
+    def fake_cli() -> None:
+        called["value"] = True
+
+    monkeypatch.setattr("redactdump.app.cli", fake_cli)
     start_application()
 
-    assert ran["value"] is True
+    assert called["value"] is True

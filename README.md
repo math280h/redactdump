@@ -25,19 +25,17 @@ pip install redactdump
 ## Usage
 
 ```shell
-usage: redactdump [-h] -c CONFIG
+Usage: redactdump [OPTIONS]
 
-redactdump
+Create a redacted database dump.
 
-optional arguments:
-  -h, --help            show this help message and exit
-  -c CONFIG, --config CONFIG
-                        Path to dump configuration.
-  -u USER, --user USER  Connection username.
-  -p PASSWORD, --password PASSWORD
-                        Connection password.
-  -d DEBUG, --debug DEBUG
-                        Enable debug mode.
+Options:
+  -c, --config TEXT      Path to dump configuration. [required]
+  -u, --user TEXT        Connection username.
+  -p, --password TEXT    Connection password.
+  --max-workers INTEGER  Max number of workers. [default: 4]
+  -d, --debug            Enable debug mode.
+  --help                 Show this message and exit.
 ```
 
 ## Configuration

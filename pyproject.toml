@@ -3,19 +3,19 @@ name = "redactdump"
 version = "0.4.0"
 description = "Easily create database dumps with support for redacting data."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Mathias V. Nielsen", email = "math280h@users.noreply.github.com" }]
 license = { file = "LICENSE" }
 urls = { Homepage = "https://github.com/math280h/redactdump" }
 dependencies = [
-    "rich>=14.0",
-    "PyYAML>=6.0.2",
-    "schema>=0.7.7",
-    "configargparse>=1.7",
-    "SQLAlchemy>=2.0",
-    "psycopg2-binary>=2.9.10",
-    "pymysql>=1.1",
-    "faker>=37.0",
+    "rich>=15.0",
+    "PyYAML>=6.0.3",
+    "pydantic>=2.13",
+    "typer>=0.26",
+    "SQLAlchemy>=2.0.50",
+    "psycopg[binary]>=3.3",
+    "pymysql>=1.2",
+    "faker>=40.0",
 ]
 
 [project.scripts]
@@ -23,15 +23,18 @@ redactdump = "redactdump.app:start_application"
 
 [dependency-groups]
 dev = [
-    "pytest>=7.4",
-    "pytest-cov>=5.0",
-    "ruff>=0.11",
+    "pytest>=9.0",
+    "pytest-cov>=7.1",
+    "ruff>=0.15",
     "ty>=0.0.44",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=redactdump --cov-report=term-missing --cov-fail-under=90"
+markers = [
+    "integration: tests that require a live database (selected with -m integration)",
+]
 
 [tool.coverage.run]
 branch = true
@@ -52,7 +55,7 @@ packages = ["redactdump"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["A", "B", "C4", "D", "E", "F", "I", "S", "W"]

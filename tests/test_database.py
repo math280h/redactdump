@@ -24,17 +24,17 @@ def make_engine_with_url(config: Dict[str, Any]) -> Any:
 
 
 def test_postgres_engine_url() -> None:
-    """A pgsql connection builds a postgresql URL."""
+    """A pgsql connection builds a psycopg3 postgresql URL."""
     create_engine = make_engine_with_url(make_config(connection_type="pgsql"))
     url = create_engine.call_args.args[0]
-    assert url == "postgresql://user:secret@127.0.0.1:5432/test"
+    assert url == "postgresql+psycopg://user:secret@127.0.0.1:5432/test"
     assert create_engine.call_args.kwargs["echo"] is False
 
 
 def test_postgresql_alias_engine_url() -> None:
     """The postgresql type is treated the same as pgsql."""
     create_engine = make_engine_with_url(make_config(connection_type="postgresql"))
-    assert create_engine.call_args.args[0].startswith("postgresql://")
+    assert create_engine.call_args.args[0].startswith("postgresql+psycopg://")
 
 
 def test_mysql_engine_url() -> None:
@@ -71,6 +71,24 @@ def test_get_tables_filters_by_select_columns() -> None:
 
     tables = database.get_tables()
     assert [column.name for column in tables[0].columns] == ["email"]
+
+
+def test_get_tables_uses_public_schema_on_postgres() -> None:
+    """The Postgres path filters information_schema by the public schema."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
+    database = build_database(make_config(), engine)
+    database.get_tables()
+    bound = [params for (_sql, params, _stmt) in engine.executed if params]
+    assert bound and all(params.get("schema") == "public" for params in bound)
+
+
+def test_get_tables_uses_database_schema_on_mysql() -> None:
+    """The MySQL path filters information_schema by the connection database name."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]}, dialect_name="mysql")
+    database = build_database(make_config(connection_type="mysql"), engine)
+    database.get_tables()
+    bound = [params for (_sql, params, _stmt) in engine.executed if params]
+    assert bound and all(params.get("schema") == "test" for params in bound)
 
 
 def test_get_tables_applies_readonly_execution_options() -> None:

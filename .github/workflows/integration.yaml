@@ -1,0 +1,60 @@
+name: "Integration"
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  integration:
+    name: "integration / ${{ matrix.database }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: postgresql
+            image: "postgres:16"
+            port: 5432
+            options: '--health-cmd "pg_isready -U test" --health-interval 10s --health-timeout 5s --health-retries 10'
+          - database: mysql
+            image: "mysql:8"
+            port: 3306
+            options: '--health-cmd "mysqladmin ping --silent" --health-interval 10s --health-timeout 5s --health-retries 10'
+
+    services:
+      db:
+        image: "${{ matrix.image }}"
+        ports:
+          - "${{ matrix.port }}:${{ matrix.port }}"
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: test
+          MYSQL_ROOT_PASSWORD: rootsecret
+          MYSQL_USER: test
+          MYSQL_PASSWORD: secret
+          MYSQL_DATABASE: test
+        options: "${{ matrix.options }}"
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Run integration tests
+      env:
+        INTEGRATION_DB: "${{ matrix.database }}"
+        INTEGRATION_HOST: 127.0.0.1
+        INTEGRATION_PORT: "${{ matrix.port }}"
+        INTEGRATION_USER: test
+        INTEGRATION_PASSWORD: secret
+        INTEGRATION_DATABASE: test
+      run: uv run pytest -m integration --no-cov
