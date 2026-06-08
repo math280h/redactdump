@@ -3,6 +3,7 @@
 import io
 import re
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Optional
 from unittest.mock import patch
 
@@ -65,12 +66,14 @@ class FakeEngine:
         schema: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         data: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         counts: Optional[Dict[str, Optional[int]]] = None,
+        dialect_name: str = "postgresql",
     ) -> None:
         self.schema = schema or {}
         self.data = data or {}
         self.counts = counts or {}
         self.executed: List[Any] = []
         self.execution_options_calls: List[Dict[str, Any]] = []
+        self.dialect = SimpleNamespace(name=dialect_name)
 
     def connect(self) -> FakeConnection:
         """Return a fresh fake connection."""

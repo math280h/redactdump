@@ -73,6 +73,24 @@ def test_get_tables_filters_by_select_columns() -> None:
     assert [column.name for column in tables[0].columns] == ["email"]
 
 
+def test_get_tables_uses_public_schema_on_postgres() -> None:
+    """The Postgres path filters information_schema by the public schema."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
+    database = build_database(make_config(), engine)
+    database.get_tables()
+    bound = [params for (_sql, params, _stmt) in engine.executed if params]
+    assert bound and all(params.get("schema") == "public" for params in bound)
+
+
+def test_get_tables_uses_database_schema_on_mysql() -> None:
+    """The MySQL path filters information_schema by the connection database name."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]}, dialect_name="mysql")
+    database = build_database(make_config(connection_type="mysql"), engine)
+    database.get_tables()
+    bound = [params for (_sql, params, _stmt) in engine.executed if params]
+    assert bound and all(params.get("schema") == "test" for params in bound)
+
+
 def test_get_tables_applies_readonly_execution_options() -> None:
     """Connections used for reads are switched into readonly mode."""
     engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})

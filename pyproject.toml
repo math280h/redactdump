@@ -32,6 +32,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=redactdump --cov-report=term-missing --cov-fail-under=90"
+markers = [
+    "integration: tests that require a live database (selected with -m integration)",
+]
 
 [tool.coverage.run]
 branch = true

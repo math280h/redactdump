@@ -45,6 +45,7 @@ class Database:
         Returns:
             List[str]: A list of tables.
         """
+        schema = self.config["connection"]["database"] if self.engine.dialect.name == "mysql" else "public"
         tables: List[Table] = []
         with self.engine.connect() as conn:
             conn = conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
@@ -52,18 +53,20 @@ class Database:
                 result = conn.execute(
                     text(
                         "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND "
-                        "table_schema='public' "
-                    )
+                        "table_schema = :schema"
+                    ),
+                    {"schema": schema},
                 )
 
                 for table in result:
                     table_columns = []
                     columns = conn.execute(
                         text(
-                            "SELECT column_name, column_default, is_nullable, data_type FROM "
-                            "information_schema.columns WHERE table_name = :table_name"
+                            "SELECT column_name AS column_name, column_default AS column_default, "
+                            "is_nullable AS is_nullable, data_type AS data_type FROM "
+                            "information_schema.columns WHERE table_name = :table_name AND table_schema = :schema"
                         ),
-                        {"table_name": table[0]},
+                        {"table_name": table[0], "schema": schema},
                     )
                     for column in columns:
                         if (
