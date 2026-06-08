@@ -136,13 +136,17 @@ class Database:
                 )
                 records = [dict(row._mapping) for row in result]
                 for item in records:
+                    row_columns = [
+                        TableColumn(column.name, column.data_type, column.is_nullable, column.default)
+                        for column in table.columns
+                    ]
                     if self.redactor.data_rules or self.redactor.column_rules:
-                        modified_column = self.redactor.redact(item, table.columns)
+                        modified_column = self.redactor.redact(item, row_columns)
                     else:
                         for key, value in item.items():
-                            column = next((x for x in table.columns if x.name == key), None)
+                            column = next((x for x in row_columns if x.name == key), None)
                             if column is not None:
                                 column.value = value
-                        modified_column = table.columns
+                        modified_column = row_columns
                     data.append(modified_column)
         return data

@@ -1,7 +1,7 @@
 import re
 import sys
 from dataclasses import dataclass
-from typing import Any, List, Pattern, Union
+from typing import Any, List, Optional, Pattern, Union
 
 from faker import Faker
 
@@ -12,7 +12,7 @@ from redactdump.core.models import TableColumn
 class CustomRule:
     """Dataclass for custom rules."""
 
-    replacement: str
+    replacement: Optional[str]
     pattern: Pattern
 
 
@@ -33,27 +33,24 @@ class Redactor:
         self.load_rules()
 
     def load_rules(self) -> None:
-        """Load redaction rules."""
-        if (
-            "data" not in self.config["redact"]["patterns"]
-            and "column" not in self.config["redact"]["patterns"]["data"]
-        ):
-            self.data_rules = []
-            self.column_rules = []
-        else:
-            for category in self.config["redact"]["patterns"]:
-                for pattern in self.config["redact"]["patterns"][category]:
+        """Load redaction rules from the optional column and data pattern groups."""
+        patterns = self.config["redact"].get("patterns", {})
+        for category in patterns:
+            for pattern in patterns[category]:
+                replacement = pattern["replacement"]
+                if replacement is not None:
                     try:
-                        getattr(self.fake, pattern["replacement"])
+                        getattr(self.fake, replacement)
                     except AttributeError:
-                        sys.exit(f"{pattern['replacement']} is not a valid replacement.")
+                        sys.exit(f"{replacement} is not a valid replacement.")
 
-                    if category == "data":
-                        self.data_rules.append(CustomRule(pattern["replacement"], re.compile(pattern["pattern"])))
-                    elif category == "column":
-                        self.column_rules.append(CustomRule(pattern["replacement"], re.compile(pattern["pattern"])))
+                rule = CustomRule(replacement, re.compile(pattern["pattern"]))
+                if category == "data":
+                    self.data_rules.append(rule)
+                elif category == "column":
+                    self.column_rules.append(rule)
 
-    def get_replacement(self, replacement: str) -> Union[str, Any]:
+    def get_replacement(self, replacement: Optional[str]) -> Union[str, Any]:
         """Get replacement value.
 
         Args:
@@ -75,7 +72,14 @@ class Redactor:
         Returns:
             dict: Redacted data.
         """
-        columns_redacted = []
+        columns_redacted: List[str] = []
+        columns_by_name = {column.name: column for column in columns}
+
+        for key, value in data.items():
+            column = columns_by_name.get(key)
+            if column is not None:
+                column.value = value
+
         for rule in self.column_rules:
             for column in [
                 column for column in columns if rule.pattern.search(column.name) and column.name not in columns_redacted
@@ -85,7 +89,7 @@ class Redactor:
 
         for rule in self.data_rules:
             for key, value in data.items():
-                discovered_column = next((x for x in columns if x.name == key), None)
+                discovered_column = columns_by_name.get(key)
 
                 if discovered_column is None:
                     raise LookupError
@@ -95,7 +99,5 @@ class Redactor:
                 if rule.pattern.search(str(value)):
                     discovered_column.value = self.get_replacement(rule.replacement)
                     columns_redacted.append(discovered_column.name)
-                else:
-                    discovered_column.value = value
 
         return columns
