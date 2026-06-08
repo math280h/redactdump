@@ -1,0 +1,229 @@
+"""Tests for the RedactDump application orchestration and CLI wiring."""
+
+import asyncio
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
+from unittest.mock import MagicMock, call
+
+import pytest
+import yaml
+from configargparse import Namespace
+from conftest import CapturingConsole, make_config
+from rich.console import Console
+
+from redactdump.app import RedactDump, start_application
+from redactdump.core.models import Table
+
+
+def make_app(
+    config: Dict[str, Any],
+    database: Any,
+    file: Any,
+    max_workers: int = 2,
+    console: Optional[Console] = None,
+) -> RedactDump:
+    """Build a RedactDump instance without running its heavy constructor."""
+    app = RedactDump.__new__(RedactDump)
+    app.console = console or Console()
+    app.config = config
+    app.database = database
+    app.file = file
+    app.args = Namespace(max_workers=max_workers)
+    return app
+
+
+def test_dump_paginates_with_default_step() -> None:
+    """A row count above the step issues offset and limit batched reads."""
+    database = MagicMock()
+    database.count_rows.return_value = 250
+    file = MagicMock()
+    file.write_to_file.return_value = "dump.sql"
+    app = make_app(make_config(), database, file)
+    table = Table("users", [])
+
+    result = app.dump(table)
+
+    assert result == (table, 250, "dump.sql")
+    assert database.get_data.call_args_list == [call(table, 0, 100), call(table, 100, 150)]
+
+
+def test_dump_single_batch_below_step() -> None:
+    """A small table is read in a single batch."""
+    database = MagicMock()
+    database.count_rows.return_value = 50
+    file = MagicMock()
+    file.write_to_file.return_value = "dump.sql"
+    app = make_app(make_config(), database, file)
+    table = Table("users", [])
+
+    result = app.dump(table)
+
+    assert result == (table, 50, "dump.sql")
+    assert database.get_data.call_args_list == [call(table, 0, 150)]
+
+
+def test_dump_empty_table_returns_no_location() -> None:
+    """An empty table performs no writes and reports no output file."""
+    database = MagicMock()
+    database.count_rows.return_value = 0
+    file = MagicMock()
+    app = make_app(make_config(), database, file)
+    table = Table("users", [])
+
+    result = app.dump(table)
+
+    assert result == (table, 0, None)
+    database.get_data.assert_not_called()
+    file.write_to_file.assert_not_called()
+
+
+def test_dump_respects_max_rows_limit() -> None:
+    """A configured max_rows_per_table overrides the live row count."""
+    database = MagicMock()
+    file = MagicMock()
+    file.write_to_file.return_value = "dump.sql"
+    app = make_app(make_config(limits={"max_rows_per_table": 30}), database, file)
+    table = Table("users", [])
+
+    result = app.dump(table)
+
+    assert result[1] == 30
+    database.count_rows.assert_not_called()
+    assert database.get_data.call_args_list == [call(table, 0, 130)]
+
+
+def test_dump_respects_rows_per_request() -> None:
+    """A configured rows_per_request changes the batch step."""
+    database = MagicMock()
+    database.count_rows.return_value = 25
+    file = MagicMock()
+    file.write_to_file.return_value = "dump.sql"
+    app = make_app(make_config(performance={"rows_per_request": 10}), database, file)
+    table = Table("users", [])
+
+    app.dump(table)
+
+    assert database.get_data.call_args_list == [call(table, 0, 10), call(table, 10, 15)]
+
+
+def test_run_exits_when_no_tables() -> None:
+    """An empty database aborts the run."""
+    database = MagicMock()
+    database.get_tables.return_value = []
+    app = make_app(make_config(), database, MagicMock())
+
+    with pytest.raises(SystemExit):
+        asyncio.run(app.run())
+
+
+def test_run_reports_each_table(capturing_console: CapturingConsole) -> None:
+    """A successful run summarises every dumped table."""
+    database = MagicMock()
+    database.get_tables.return_value = [Table("alpha", []), Table("beta", [])]
+    database.count_rows.return_value = 5
+    database.get_data.return_value = []
+    file = MagicMock()
+    file.write_to_file.return_value = "out.sql"
+    app = make_app(make_config(), database, file, console=capturing_console.console)
+
+    asyncio.run(app.run())
+
+    text = capturing_console.text
+    assert "Finished working 2 tables" in text
+    assert "alpha" in text and "beta" in text
+
+
+def test_run_marks_limited_row_counts(capturing_console: CapturingConsole) -> None:
+    """When a row limit is configured the summary flags it."""
+    database = MagicMock()
+    database.get_tables.return_value = [Table("alpha", [])]
+    database.get_data.return_value = []
+    file = MagicMock()
+    file.write_to_file.return_value = "alpha.sql"
+    config = make_config(limits={"max_rows_per_table": 10})
+    app = make_app(config, database, file, console=capturing_console.console)
+
+    asyncio.run(app.run())
+
+    assert "Limited via config" in capturing_console.text
+
+
+def write_config_file(tmp_path: Path, include_credentials: bool = False) -> Path:
+    """Write a schema-valid config file, optionally with credentials."""
+    connection: Dict[str, Any] = {"type": "pgsql", "host": "127.0.0.1", "port": 5432, "database": "test"}
+    if include_credentials:
+        connection["username"] = "config_user"
+        connection["password"] = "config_pass"
+    data = {
+        "connection": connection,
+        "redact": {"patterns": {"data": []}},
+        "output": {"type": "file", "location": str(tmp_path / "dump")},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data))
+    return path
+
+
+def test_init_exits_when_username_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run without a username in config or args is rejected."""
+    config_path = write_config_file(tmp_path)
+    monkeypatch.setattr("redactdump.app.Database", MagicMock())
+    monkeypatch.setattr("redactdump.app.File", MagicMock())
+    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path)])
+
+    with pytest.raises(SystemExit):
+        RedactDump()
+
+
+def test_init_exits_when_password_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A username without a password is rejected."""
+    config_path = write_config_file(tmp_path)
+    monkeypatch.setattr("redactdump.app.Database", MagicMock())
+    monkeypatch.setattr("redactdump.app.File", MagicMock())
+    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path), "-u", "bob"])
+
+    with pytest.raises(SystemExit):
+        RedactDump()
+
+
+def test_init_credentials_from_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Credentials supplied on the command line populate the connection."""
+    config_path = write_config_file(tmp_path)
+    monkeypatch.setattr("redactdump.app.Database", MagicMock())
+    monkeypatch.setattr("redactdump.app.File", MagicMock())
+    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path), "-u", "bob", "-p", "pw"])
+
+    app = RedactDump()
+
+    assert app.config["connection"]["username"] == "bob"
+    assert app.config["connection"]["password"] == "pw"
+
+
+def test_init_credentials_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Credentials already in the config are kept without command line args."""
+    config_path = write_config_file(tmp_path, include_credentials=True)
+    monkeypatch.setattr("redactdump.app.Database", MagicMock())
+    monkeypatch.setattr("redactdump.app.File", MagicMock())
+    monkeypatch.setattr(sys, "argv", ["redactdump", "-c", str(config_path)])
+
+    app = RedactDump()
+
+    assert app.config["connection"]["username"] == "config_user"
+    assert app.config["connection"]["password"] == "config_pass"
+
+
+def test_start_application_runs_the_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The entry point constructs the app and runs its async loop."""
+    ran = {"value": False}
+
+    async def fake_run() -> None:
+        ran["value"] = True
+
+    instance = MagicMock()
+    instance.run = fake_run
+    monkeypatch.setattr("redactdump.app.RedactDump", MagicMock(return_value=instance))
+
+    start_application()
+
+    assert ran["value"] is True

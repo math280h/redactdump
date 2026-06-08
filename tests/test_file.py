@@ -2,6 +2,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+import pytest
+from conftest import CapturingConsole
 from rich.console import Console
 
 from redactdump.core.file import File
@@ -139,3 +141,127 @@ def test_single_file_concurrent_writes(tmp_path: Path) -> None:
     lines = (tmp_path / "dump.sql").read_text().splitlines()
     assert len(lines) == 200
     assert all(line.startswith("INSERT INTO events") and line.endswith(");") for line in lines)
+
+
+def build_multi_config(location: object, naming: Optional[str] = None) -> dict:
+    """Build a minimal multi_file output config."""
+    output: dict = {"type": "multi_file", "location": str(location)}
+    if naming is not None:
+        output["naming"] = naming
+    return {"debug": {"enabled": False}, "output": output}
+
+
+def test_multi_file_output_default_name(tmp_path: Path) -> None:
+    """Without a naming template the file is named after the table."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    file = File(build_multi_config(outdir), Console())
+    name = file.write_to_file(Table("users", []), sample_rows())
+
+    assert name is not None
+    assert name.startswith("users-") and name.endswith(".sql")
+    assert (outdir / name).read_text() == 'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
+
+
+def test_multi_file_output_named_template(tmp_path: Path) -> None:
+    """The naming template is applied to per-table files."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    file = File(build_multi_config(outdir, naming="dump-[table_name]-[timestamp]"), Console())
+    name = file.write_to_file(Table("users", []), sample_rows())
+
+    assert name is not None
+    assert name.startswith("dump-users-") and name.endswith(".sql")
+    assert "[timestamp]" not in name
+
+
+def test_multi_file_appends_across_writes(tmp_path: Path) -> None:
+    """Two writes to the same table file append rather than overwrite."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    file = File(build_multi_config(outdir, naming="[table_name]"), Console())
+    file.write_to_file(Table("users", []), sample_rows())
+    file.write_to_file(Table("users", []), sample_rows())
+
+    lines = (outdir / "users.sql").read_text().splitlines()
+    assert len(lines) == 2
+
+
+def test_create_output_locations_makes_multi_file_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing multi_file directory is created on init."""
+    monkeypatch.chdir(tmp_path)
+    File(build_multi_config("generated"), Console())
+    assert (tmp_path / "generated").is_dir()
+
+
+def test_get_name_without_naming() -> None:
+    """The default file name is table-timestamp.sql."""
+    name = File.get_name({"location": "x"}, Table("orders", []))
+    assert name.startswith("orders-") and name.endswith(".sql")
+
+
+def test_get_name_with_naming() -> None:
+    """The naming template substitutes table and timestamp tokens."""
+    name = File.get_name({"naming": "dump-[table_name]-[timestamp]"}, Table("orders", []))
+    assert name.startswith("dump-orders-") and name.endswith(".sql")
+    assert "[timestamp]" not in name and "[table_name]" not in name
+
+
+def test_insert_statement_quotes_columns_and_values() -> None:
+    """An INSERT statement quotes identifiers and renders each value."""
+    row = [
+        TableColumn("id", "integer", False, "", 1),
+        TableColumn("name", "character varying", True, "", "Bob"),
+    ]
+    statement = File.insert_statement(Table("users", []), row)
+    assert statement == 'INSERT INTO users ("id", "name") VALUES (1, \'Bob\');'
+
+
+def test_resolve_file_path_without_naming() -> None:
+    """Without a naming template the single file is location.sql."""
+    assert File.resolve_file_path({"location": "out/db"}) == "out/db.sql"
+
+
+def test_format_value_all_numeric_types() -> None:
+    """Every numeric type is rendered unquoted."""
+    for data_type in ["bigint", "integer", "smallint", "double precision", "numeric"]:
+        assert File.format_value(column(data_type, 7)) == "7"
+
+
+def test_format_value_bit_varying() -> None:
+    """Bit varying uses the same b'...' rendering as bit."""
+    assert File.format_value(column("bit varying", "10")) == "b'10'"
+
+
+def test_format_value_bytea_accepts_bytearray() -> None:
+    """A bytearray bytea value is rendered as a hex literal."""
+    assert File.format_value(column("bytea", bytearray(b"\x01\x02"))) == "'\\x0102'::bytea"
+
+
+def test_write_to_file_unknown_type_returns_none(tmp_path: Path) -> None:
+    """An output type that is neither file nor multi_file writes nothing."""
+    config = {"debug": {"enabled": False}, "output": {"type": "file", "location": str(tmp_path / "dump")}}
+    file = File(config, Console())
+    file.config["output"]["type"] = "other"
+    assert file.write_to_file(Table("users", []), sample_rows()) is None
+
+
+def test_debug_output_for_single_file(tmp_path: Path) -> None:
+    """Debug mode reports the output checks and the created file."""
+    console = CapturingConsole()
+    config = {"debug": {"enabled": True}, "output": {"type": "file", "location": str(tmp_path / "dump")}}
+    File(config, console.console)
+
+    assert "Checking output locations" in console.text
+    assert "Created file" in console.text
+
+
+def test_debug_output_for_multi_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Debug mode reports the created directory for multi_file output."""
+    monkeypatch.chdir(tmp_path)
+    console = CapturingConsole()
+    config = {"debug": {"enabled": True}, "output": {"type": "multi_file", "location": "./generated"}}
+    File(config, console.console)
+
+    assert "Created directory" in console.text
+    assert (tmp_path / "generated").is_dir()

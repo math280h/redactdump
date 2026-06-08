@@ -2,6 +2,7 @@ name: "Test"
 
 on:
   push:
+  pull_request:
 
 jobs:
   test:
@@ -9,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: write
 
     steps:
     - name: Checkout repository
@@ -22,3 +24,36 @@ jobs:
 
     - name: Run tests
       run: uv run pytest
+
+    - name: Build coverage summary
+      if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+      run: |
+        if [ -f .coverage ]; then
+          uv run coverage report --format=markdown > coverage.md
+        else
+          echo "No coverage data was produced." > coverage.md
+        fi
+
+    - name: Comment coverage on pull request
+      if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+      continue-on-error: true
+      uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- coverage-report -->';
+          const table = fs.readFileSync('coverage.md', 'utf8');
+          const body = `${marker}\n## Test coverage\n\n${table}`;
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner,
+            repo,
+            issue_number,
+          });
+          const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
