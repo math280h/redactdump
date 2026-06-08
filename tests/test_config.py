@@ -6,8 +6,7 @@ from typing import Any, Dict
 
 import pytest
 import yaml
-from configargparse import Namespace
-from schema import SchemaError
+from pydantic import ValidationError
 
 from redactdump.core.config import Config
 
@@ -25,7 +24,7 @@ def load(tmp_path: Path, data: Dict[str, Any]) -> Dict[str, Any]:
     """Write data to a yaml file and load it through Config."""
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(data))
-    return Config(Namespace(config=str(path))).load_config()
+    return Config(str(path)).load_config()
 
 
 def test_load_returns_dict(tmp_path: Path) -> None:
@@ -84,7 +83,7 @@ def test_invalid_output_type_rejected(tmp_path: Path) -> None:
     """An unknown output type fails validation."""
     data = base_config()
     data["output"]["type"] = "stdout"
-    with pytest.raises(SchemaError):
+    with pytest.raises(ValidationError):
         load(tmp_path, data)
 
 
@@ -92,7 +91,7 @@ def test_missing_connection_rejected(tmp_path: Path) -> None:
     """Connection is required."""
     data = base_config()
     del data["connection"]
-    with pytest.raises(SchemaError):
+    with pytest.raises(ValidationError):
         load(tmp_path, data)
 
 
@@ -100,7 +99,7 @@ def test_missing_output_rejected(tmp_path: Path) -> None:
     """Output is required."""
     data = base_config()
     del data["output"]
-    with pytest.raises(SchemaError):
+    with pytest.raises(ValidationError):
         load(tmp_path, data)
 
 
@@ -108,7 +107,7 @@ def test_missing_redact_rejected(tmp_path: Path) -> None:
     """Redact is required."""
     data = base_config()
     del data["redact"]
-    with pytest.raises(SchemaError):
+    with pytest.raises(ValidationError):
         load(tmp_path, data)
 
 
@@ -116,7 +115,7 @@ def test_non_integer_port_rejected(tmp_path: Path) -> None:
     """A string port violates the schema."""
     data = base_config()
     data["connection"]["port"] = "5432"
-    with pytest.raises(SchemaError):
+    with pytest.raises(ValidationError):
         load(tmp_path, data)
 
 
@@ -132,7 +131,7 @@ def test_pattern_replacement_non_string_rejected(tmp_path: Path) -> None:
     """A non-string, non-null replacement is rejected."""
     data = base_config()
     data["redact"]["patterns"] = {"data": [{"pattern": "x", "replacement": 5}]}
-    with pytest.raises(SchemaError):
+    with pytest.raises(ValidationError):
         load(tmp_path, data)
 
 

@@ -1,8 +1,9 @@
+import asyncio
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-import configargparse
+import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table as RichTable
@@ -13,12 +14,32 @@ from redactdump.core.database import Database
 from redactdump.core.file import File
 from redactdump.core.models import Table
 
+cli = typer.Typer(add_completion=False)
+
 
 class RedactDump:
     """RedactDump is a tool for redacting sensitive data from a database."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        config_path: str,
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+        max_workers: int = 4,
+        debug: bool = False,
+    ) -> None:
+        """Initialize the application.
+
+        Args:
+            config_path (str): Path to the dump configuration file.
+            user (Optional[str]): Connection username override.
+            password (Optional[str]): Connection password override.
+            max_workers (int): Maximum number of worker threads.
+            debug (bool): Enable debug mode.
+        """
         self.console = Console()
+        self.max_workers = max_workers
+        self.debug = debug
 
         self.console.print(
             Panel(
@@ -31,57 +52,18 @@ class RedactDump:
         )
         self.console.print()
 
-        parser = configargparse.ArgParser(description="redactdump", usage="redactdump [-h] -c CONFIG")
-        parser.add_argument(
-            "-c",
-            "--config",
-            type=str,
-            help="Path to dump configuration.",
-            required=True,
-        )
-        parser.add_argument(
-            "-u",
-            "--user",
-            type=str,
-            help="Connection username.",
-            required=False,
-        )
-        parser.add_argument(
-            "-p",
-            "--password",
-            type=str,
-            help="Connection password.",
-            required=False,
-        )
-        parser.add_argument(
-            "--max_workers",
-            type=int,
-            help="Max number of workers.",
-            required=False,
-            default=4,
-        )
-        parser.add_argument(
-            "-d",
-            "--debug",
-            type=bool,
-            help="Enable debug mode.",
-            default=False,
-            required=False,
-        )
-
-        self.args = parser.parse_args()
-        self.config = Config(self.args).load_config()
+        self.config = Config(config_path).load_config()
 
         if "username" not in self.config["connection"]:
-            if self.args.user is None:
+            if user is None:
                 self.console.print("[red]Connection username is required, either via config or arguments[/red]")
                 sys.exit(1)
-            self.config["connection"]["username"] = self.args.user
+            self.config["connection"]["username"] = user
         if "password" not in self.config["connection"]:
-            if self.args.password is None:
+            if password is None:
                 self.console.print("[red]Connection password is required, either via config or arguments[/red]")
                 sys.exit(1)
-            self.config["connection"]["password"] = self.args.password
+            self.config["connection"]["password"] = password
 
         self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
@@ -126,7 +108,7 @@ class RedactDump:
             self.console.print("[red]No tables found[/red]")
             sys.exit(1)
 
-        with ThreadPoolExecutor(max_workers=self.args.max_workers) as exe:
+        with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
             result = exe.map(self.dump, tables)
 
         self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
@@ -153,12 +135,22 @@ class RedactDump:
         self.console.print(table)
 
 
+@cli.command()
+def main(
+    config: str = typer.Option(..., "-c", "--config", help="Path to dump configuration."),
+    user: Optional[str] = typer.Option(None, "-u", "--user", help="Connection username."),
+    password: Optional[str] = typer.Option(None, "-p", "--password", help="Connection password."),
+    max_workers: int = typer.Option(4, "--max-workers", help="Max number of workers."),
+    debug: bool = typer.Option(False, "-d", "--debug", help="Enable debug mode."),
+) -> None:
+    """Create a redacted database dump."""
+    redactor = RedactDump(config, user, password, max_workers, debug)
+    asyncio.run(redactor.run())
+
+
 def start_application() -> None:
     """Start the application."""
-    import asyncio
-
-    app = RedactDump()
-    asyncio.run(app.run())
+    cli()
 
 
 if __name__ == "__main__":

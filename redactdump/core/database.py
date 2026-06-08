@@ -24,7 +24,7 @@ class Database:
         self.redactor = Redactor(config)
 
         if self.config["connection"]["type"] == "postgresql" or self.config["connection"]["type"] == "pgsql":
-            engine = "postgresql://"
+            engine = "postgresql+psycopg://"
         elif self.config["connection"]["type"] == "mysql":
             engine = "mysql+pymysql://"
         else:
