@@ -507,3 +507,71 @@ def test_named_column_preserve_null() -> None:
     red = table_redactor({"users": [{"name": "email", "replacement": "email", "preserve_null": True}]})
     result = red.redact({"email": None}, columns(("email", None)), "users")
     assert result[0].value is None
+
+
+def test_static_value_replaces_matching_column() -> None:
+    """A value rule replaces matched cells with the literal verbatim."""
+    red = redactor({"column": [{"pattern": "^notes$", "value": "REDACTED"}]})
+    result = red.redact({"notes": "secret"}, columns(("notes", None)))
+    assert result[0].value == "REDACTED"
+
+
+def test_static_value_is_not_validated_as_provider() -> None:
+    """A literal that happens to look like a provider name is taken verbatim."""
+    red = redactor({"column": [{"pattern": "^notes$", "value": "definitely_not_a_provider"}]})
+    result = red.redact({"notes": "secret"}, columns(("notes", None)))
+    assert result[0].value == "definitely_not_a_provider"
+
+
+def test_static_value_keeps_python_type() -> None:
+    """Non-string literals such as 0 keep their type."""
+    red = redactor({"column": [{"pattern": "^balance$", "value": 0}]})
+    result = red.redact({"balance": 1337}, columns(("balance", None)))
+    assert result[0].value == 0
+
+
+def test_static_empty_string_value() -> None:
+    """An empty string literal is a usable replacement."""
+    red = redactor({"column": [{"pattern": "^notes$", "value": ""}]})
+    result = red.redact({"notes": "secret"}, columns(("notes", None)))
+    assert result[0].value == ""
+
+
+def test_static_none_value_becomes_null() -> None:
+    """A null literal maps the cell to a real NULL."""
+    red = redactor({"column": [{"pattern": "^notes$", "value": None}]})
+    result = red.redact({"notes": "secret"}, columns(("notes", None)))
+    assert result[0].value is None
+
+
+def test_static_value_on_data_rule() -> None:
+    """A value literal works on data rules as well."""
+    red = redactor({"data": [{"pattern": "secret", "value": "REDACTED"}]})
+    result = red.redact({"notes": "secret"}, columns(("notes", None)))
+    assert result[0].value == "REDACTED"
+
+
+def test_named_column_static_value() -> None:
+    """A value literal works on redact.columns entries."""
+    red = table_redactor({"users": [{"name": "notes", "value": "REDACTED"}]})
+    result = red.redact({"notes": "secret"}, columns(("notes", None)), "users")
+    assert result[0].value == "REDACTED"
+
+
+def test_static_value_respects_preserve_null() -> None:
+    """A value rule with preserve_null keeps NULL cells NULL."""
+    red = redactor({"column": [{"pattern": "^notes$", "value": "REDACTED", "preserve_null": True}]})
+    result = red.redact({"notes": None}, columns(("notes", None)))
+    assert result[0].value is None
+
+
+def test_static_value_and_unique_rejected() -> None:
+    """A static value cannot satisfy uniqueness, so the combination is rejected."""
+    with pytest.raises(SystemExit):
+        redactor({"column": [{"pattern": "^notes$", "value": "REDACTED", "unique": True}]})
+
+
+def test_named_column_static_value_and_unique_rejected() -> None:
+    """The value/unique conflict is also rejected on redact.columns entries."""
+    with pytest.raises(SystemExit):
+        table_redactor({"users": [{"name": "notes", "value": "REDACTED", "unique": True}]})

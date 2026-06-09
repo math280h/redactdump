@@ -29,6 +29,10 @@ class CustomRule:
     consistent: bool = False
     unique: bool = False
     preserve_null: bool = False
+    # A static replacement: every matched cell becomes literal verbatim.
+    # The flag distinguishes "no literal configured" from a literal None.
+    literal: Any = None
+    is_literal: bool = False
 
 
 class Redactor:
@@ -132,13 +136,15 @@ class Redactor:
         """
         if rule.unique and rule.consistent:
             sys.exit(f"The rule for {label} cannot be both unique and consistent.")
+        if rule.unique and rule.is_literal:
+            sys.exit(f"The rule for {label} cannot be unique with a static value.")
 
     def load_rules(self) -> None:
         """Load redaction rules from the pattern groups and named table columns."""
         patterns = self.config["redact"].get("patterns", {})
         for category in patterns:
             for pattern in patterns[category]:
-                replacement = pattern["replacement"]
+                replacement = pattern.get("replacement")
                 self.validate_replacement(replacement)
 
                 arguments = self.resolve_arguments(pattern.get("arguments") or {})
@@ -149,6 +155,8 @@ class Redactor:
                     bool(pattern.get("consistent")),
                     bool(pattern.get("unique")),
                     bool(pattern.get("preserve_null")),
+                    pattern.get("value"),
+                    "value" in pattern,
                 )
                 self.validate_flags(rule, f"pattern {pattern['pattern']}")
                 if category == "data":
@@ -159,7 +167,7 @@ class Redactor:
         columns = self.config["redact"].get("columns") or {}
         for table_name, named_columns in columns.items():
             for named in named_columns:
-                replacement = named["replacement"]
+                replacement = named.get("replacement")
                 self.validate_replacement(replacement)
                 rule = CustomRule(
                     replacement,
@@ -167,6 +175,8 @@ class Redactor:
                     consistent=bool(named.get("consistent")),
                     unique=bool(named.get("unique")),
                     preserve_null=bool(named.get("preserve_null")),
+                    literal=named.get("value"),
+                    is_literal="value" in named,
                 )
                 self.validate_flags(rule, f"column {named['name']} of table {table_name}")
                 self.table_rules.setdefault(table_name, []).append(rule)
@@ -207,6 +217,17 @@ class Redactor:
                 "it cannot generate enough distinct outputs for the rows being dumped."
             ) from None
 
+    def rule_replacement(self, rule: CustomRule, value: Any) -> Any:
+        """Compute a rule's output for one cell.
+
+        Args:
+            rule (CustomRule): The matched rule.
+            value (Any): The original cell value.
+        """
+        if rule.is_literal:
+            return rule.literal
+        return self.get_replacement(rule.replacement, rule.arguments, value, rule.consistent, rule.unique)
+
     def redact(self, data: dict, columns: List[TableColumn], table_name: Optional[str] = None) -> list[TableColumn]:
         """Redact data.
 
@@ -235,9 +256,7 @@ class Redactor:
                 # A preserve_null rule keeps a NULL cell NULL but still claims
                 # the column, so no later rule fabricates a value for it.
                 if not (rule.preserve_null and column.value is None):
-                    column.value = self.get_replacement(
-                        rule.replacement, rule.arguments, column.value, rule.consistent, rule.unique
-                    )
+                    column.value = self.rule_replacement(rule, column.value)
                 columns_redacted.append(column.name)
 
         for rule in self.data_rules:
@@ -251,9 +270,7 @@ class Redactor:
 
                 if rule.pattern.search(str(value)):
                     if not (rule.preserve_null and value is None):
-                        discovered_column.value = self.get_replacement(
-                            rule.replacement, rule.arguments, value, rule.consistent, rule.unique
-                        )
+                        discovered_column.value = self.rule_replacement(rule, value)
                     columns_redacted.append(discovered_column.name)
 
         return columns
