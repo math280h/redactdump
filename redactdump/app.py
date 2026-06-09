@@ -113,15 +113,24 @@ class RedactDump:
                 sys.exit(1)
 
             semaphore = asyncio.Semaphore(self.max_workers)
+            failures: dict[str, str] = {}
 
             async def bounded_dump(table: Table) -> tuple[Table, int, Optional[str]]:
                 async with semaphore:
-                    return await self.dump(table)
+                    try:
+                        return await self.dump(table)
+                    except Exception as exc:
+                        # One bad table must not abort the other in-flight
+                        # tables; record it and surface it in the summary.
+                        failures[table.name] = str(exc)
+                        self.console.print(f"[red]ERROR: Failed to dump table {table.name}: {exc}[/red]")
+                        return table, 0, None
 
             result = await asyncio.gather(*(bounded_dump(table) for table in tables))
 
             for table in tables:
-                await self.file.write_statements(table, table.foreign_keys)
+                if table.name not in failures:
+                    await self.file.write_statements(table, table.foreign_keys)
 
             self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
             table = RichTable()
@@ -138,6 +147,9 @@ class RedactDump:
             )
 
             for res in sorted_output:
+                if res[0].name in failures:
+                    table.add_row(res[0].name, "-", "[red]FAILED[/red]")
+                    continue
                 table.add_row(
                     res[0].name,
                     f"{str(res[1])}{row_count_limited}",
@@ -145,6 +157,10 @@ class RedactDump:
                 )
 
             self.console.print(table)
+
+            if failures:
+                self.console.print(f"\n[red]Failed to dump {len(failures)} of {len(tables)} tables[/red]")
+                sys.exit(1)
         finally:
             await self.database.dispose()
 
