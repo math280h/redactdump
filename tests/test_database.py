@@ -23,30 +23,34 @@ def make_engine_with_url(config: Dict[str, Any]) -> Any:
     return create_async_engine
 
 
+def rendered_url(create_async_engine: Any) -> str:
+    """Render the URL object passed to create_async_engine, with the password."""
+    return create_async_engine.call_args.args[0].render_as_string(hide_password=False)
+
+
 def test_postgres_engine_url() -> None:
     """A pgsql connection builds a psycopg3 postgresql URL."""
     create_async_engine = make_engine_with_url(make_config(connection_type="pgsql"))
-    url = create_async_engine.call_args.args[0]
-    assert url == "postgresql+psycopg://user:secret@127.0.0.1:5432/test"
+    assert rendered_url(create_async_engine) == "postgresql+psycopg://user:secret@127.0.0.1:5432/test"
     assert create_async_engine.call_args.kwargs["echo"] is False
 
 
 def test_postgresql_alias_engine_url() -> None:
     """The postgresql type is treated the same as pgsql."""
     create_async_engine = make_engine_with_url(make_config(connection_type="postgresql"))
-    assert create_async_engine.call_args.args[0].startswith("postgresql+psycopg://")
+    assert rendered_url(create_async_engine).startswith("postgresql+psycopg://")
 
 
 def test_mysql_engine_url() -> None:
     """A mysql connection builds an aiomysql URL."""
     create_async_engine = make_engine_with_url(make_config(connection_type="mysql"))
-    assert create_async_engine.call_args.args[0].startswith("mysql+aiomysql://")
+    assert rendered_url(create_async_engine).startswith("mysql+aiomysql://")
 
 
 def test_mssql_engine_url() -> None:
     """An mssql connection builds an aioodbc URL carrying the ODBC driver."""
     create_async_engine = make_engine_with_url(make_config(connection_type="mssql"))
-    url = create_async_engine.call_args.args[0]
+    url = rendered_url(create_async_engine)
     assert url.startswith("mssql+aioodbc://user:secret@127.0.0.1:5432/test?")
     assert "driver=ODBC+Driver+18+for+SQL+Server" in url
     assert "TrustServerCertificate=yes" in url
@@ -57,7 +61,23 @@ def test_mssql_engine_url_respects_configured_driver() -> None:
     config = make_config(connection_type="mssql")
     config["connection"]["driver"] = "ODBC Driver 17 for SQL Server"
     create_async_engine = make_engine_with_url(config)
-    assert "driver=ODBC+Driver+17+for+SQL+Server" in create_async_engine.call_args.args[0]
+    assert "driver=ODBC+Driver+17+for+SQL+Server" in rendered_url(create_async_engine)
+
+
+def test_credentials_with_reserved_characters_are_escaped() -> None:
+    """Reserved URL characters in credentials are escaped, not parsed."""
+    config = make_config()
+    config["connection"]["username"] = "user@corp"
+    config["connection"]["password"] = "p@ss:w/rd#1"
+    create_async_engine = make_engine_with_url(config)
+
+    url = create_async_engine.call_args.args[0]
+    assert url.username == "user@corp"
+    assert url.password == "p@ss:w/rd#1"
+    assert url.host == "127.0.0.1"
+    assert (
+        rendered_url(create_async_engine) == "postgresql+psycopg://user%40corp:p%40ss%3Aw%2Frd%231@127.0.0.1:5432/test"
+    )
 
 
 def test_unsupported_engine_raises() -> None:
