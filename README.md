@@ -155,6 +155,41 @@ output:
 * `multi_file`: one `.sql` file per table inside `location` (a directory).
 * `file`: every table is written into a single file. Without `naming` the file is `{location}.sql`; with `naming` the templated name (with `[table_name]` dropped) is placed in the directory of `location`. The file is recreated on each run.
 
+### DDL
+
+Set `output.ddl: true` to prepend each table's `CREATE TABLE` statement before
+its data, so the dump can recreate the schema as well as the rows. The DDL is
+produced by the database itself and is dialect-aware:
+
+* **MySQL** uses `SHOW CREATE TABLE`, so the definition is authoritative and
+  complete (exact types, primary key, indexes, constraints, engine and charset).
+* **PostgreSQL** has no such statement, so the definition is reconstructed from
+  `pg_catalog`: exact types (including lengths and precision such as
+  `character varying(64)` or `numeric(10,2)`), `NOT NULL`, column defaults, the
+  primary key (in column order) and secondary indexes. Foreign keys are emitted
+  as `ALTER TABLE ... ADD CONSTRAINT` statements at the very end of the dump, so
+  referenced tables and rows already exist when they are applied.
+
+The DDL is written once per table (empty tables still get their schema).
+
+````yaml
+output:
+  type: multi_file
+  location: './output/'
+  ddl: true
+````
+
+An example of the generated PostgreSQL DDL:
+
+````sql
+CREATE TABLE "users" (
+    "id" integer NOT NULL DEFAULT nextval('users_id_seq'::regclass),
+    "email" character varying(255) NOT NULL,
+    "note" text,
+    PRIMARY KEY ("id")
+);
+````
+
 ### Configuration Schema
 
 The configuration schema can be found [here](redactdump/core/config.py)
@@ -224,7 +259,24 @@ INSERT INTO table_name VALUES (99, 'Robin Jefferson');
 
 ## Data types
 
-PostgreSQL-specific types (`inet`, `cidr`, `macaddr`, `macaddr8`, `interval`, `point`, `line`, `lseg`, `box`, `circle`, `polygon`, `tsvector`, `tsquery`, `pg_lsn`, `pg_snapshot`, `txid_snapshot`) are exported with an explicit `::type` cast, and `bytea` is exported as a hex literal. Redacting one of these columns requires a replacement that produces a value valid for the type.
+Values are rendered from their Python type for the connection's dialect, so a
+dump can be replayed into the same engine it came from. Booleans, numbers,
+dates/times, binary, JSON and (on PostgreSQL) arrays are all rendered as proper
+literals rather than a quoted Python representation.
+
+* **PostgreSQL**: identifiers are double-quoted; booleans are `TRUE`/`FALSE`;
+  `bytea` is a `'\x..'::bytea` hex literal; JSON is serialised and cast
+  (`'..'::jsonb`); arrays use array literals (`'{1,2,3}'`); and the
+  PostgreSQL-specific types (`inet`, `cidr`, `macaddr`, `macaddr8`, `interval`,
+  `point`, `line`, `lseg`, `box`, `circle`, `polygon`, `tsvector`, `tsquery`,
+  `pg_lsn`, `pg_snapshot`, `txid_snapshot`) keep an explicit `::type` cast.
+* **MySQL**: identifiers are backtick-quoted; booleans are `1`/`0`; binary
+  (`blob`, `varbinary`, ...) is an `X'..'` hex literal; `BIT` is its integer
+  value; and backslashes in strings are escaped (MySQL treats them as escape
+  characters).
+
+Redacting one of the dialect-specific types requires a replacement that produces
+a value valid for the type.
 
 ## Performance
 

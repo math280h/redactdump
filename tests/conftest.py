@@ -78,10 +78,20 @@ class FakeEngine:
         data: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         counts: Optional[Dict[str, Optional[int]]] = None,
         dialect_name: str = "postgresql",
+        ddl_columns: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        primary_keys: Optional[Dict[str, List[str]]] = None,
+        create_statements: Optional[Dict[str, str]] = None,
+        ddl_indexes: Optional[Dict[str, List[str]]] = None,
+        foreign_keys: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     ) -> None:
         self.schema = schema or {}
         self.data = data or {}
         self.counts = counts or {}
+        self.ddl_columns = ddl_columns or {}
+        self.primary_keys = primary_keys or {}
+        self.create_statements = create_statements or {}
+        self.ddl_indexes = ddl_indexes or {}
+        self.foreign_keys = foreign_keys or {}
         self.executed: List[Any] = []
         self.execution_options_calls: List[Dict[str, Any]] = []
         self.dialect = SimpleNamespace(name=dialect_name)
@@ -102,6 +112,22 @@ class FakeEngine:
         if "information_schema.columns" in sql:
             table_name = (params or {}).get("table_name", "")
             return [FakeRow(column) for column in self.schema.get(table_name, [])]
+        if "SHOW CREATE TABLE" in sql:
+            match = re.search(r"SHOW CREATE TABLE `(\w+)`", sql)
+            name = match.group(1) if match else ""
+            return [FakeRow({"Table": name, "Create Table": self.create_statements.get(name, "")})]
+        if "pg_catalog.pg_attribute" in sql and "format_type" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow(column) for column in self.ddl_columns.get(table_name, [])]
+        if "pg_get_indexdef" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow({"statement": statement}) for statement in self.ddl_indexes.get(table_name, [])]
+        if "pg_get_constraintdef" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow(foreign_key) for foreign_key in self.foreign_keys.get(table_name, [])]
+        if "pg_catalog.pg_index" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow({"name": name}) for name in self.primary_keys.get(table_name, [])]
         if "COUNT(*)" in sql:
             table = self._table_from_sql(sql)
             value = self.counts.get(table, 0)

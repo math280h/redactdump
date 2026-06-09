@@ -245,3 +245,131 @@ async def test_get_data_redaction_dispatch_uses_redactor() -> None:
     with patch.object(database.redactor, "redact", spy):
         await database.get_data(passthrough_table(), 0, 100)
     assert spy.called
+
+
+def ddl_config() -> Dict[str, Any]:
+    """A config with DDL output enabled."""
+    return make_config(output={"type": "file", "location": "out", "ddl": True})
+
+
+def test_postgres_ddl_reconstructs_columns_and_primary_key() -> None:
+    """The Postgres builder renders types, nullability, defaults and the PK."""
+    columns = [
+        ("id", "integer", True, "nextval('users_id_seq'::regclass)"),
+        ("email", "character varying(255)", True, None),
+        ("note", "text", False, None),
+    ]
+    assert Database.postgres_ddl("users", columns, ["id"]) == (
+        'CREATE TABLE "users" (\n'
+        "    \"id\" integer NOT NULL DEFAULT nextval('users_id_seq'::regclass),\n"
+        '    "email" character varying(255) NOT NULL,\n'
+        '    "note" text,\n'
+        '    PRIMARY KEY ("id")\n'
+        ");"
+    )
+
+
+def test_postgres_ddl_without_primary_key_omits_clause() -> None:
+    """A table with no primary key emits no PRIMARY KEY clause."""
+    ddl = Database.postgres_ddl("t", [("x", "integer", False, None)], [])
+    assert ddl == 'CREATE TABLE "t" (\n    "x" integer\n);'
+
+
+def test_postgres_ddl_composite_primary_key() -> None:
+    """A composite primary key lists each column in order."""
+    columns = [("a", "integer", True, None), ("b", "integer", True, None)]
+    ddl = Database.postgres_ddl("pair", columns, ["a", "b"])
+    assert ddl.endswith('    PRIMARY KEY ("a", "b")\n);')
+
+
+async def test_get_tables_attaches_postgres_ddl() -> None:
+    """get_tables reconstructs Postgres DDL when ddl output is enabled."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "integer")]},
+        ddl_columns={
+            "users": [
+                {"name": "id", "data_type": "integer", "not_null": True, "default_value": None},
+                {"name": "email", "data_type": "character varying(255)", "not_null": False, "default_value": None},
+            ]
+        },
+        primary_keys={"users": ["id"]},
+    )
+    database = build_database(ddl_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl == (
+        'CREATE TABLE "users" (\n'
+        '    "id" integer NOT NULL,\n'
+        '    "email" character varying(255),\n'
+        '    PRIMARY KEY ("id")\n'
+        ");"
+    )
+
+
+async def test_get_tables_uses_show_create_table_on_mysql() -> None:
+    """get_tables uses the authoritative SHOW CREATE TABLE output on MySQL."""
+    create = "CREATE TABLE `users` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB"
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "int")]},
+        dialect_name="mysql",
+        create_statements={"users": create},
+    )
+    database = build_database(
+        make_config(connection_type="mysql", output={"type": "file", "location": "out", "ddl": True}), engine
+    )
+    tables = await database.get_tables()
+    assert tables[0].ddl == f"{create};"
+
+
+async def test_get_tables_skips_ddl_when_disabled() -> None:
+    """Without the ddl flag no DDL is generated and tables carry none."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
+    database = build_database(make_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl is None
+    assert tables[0].foreign_keys == []
+    assert not any("SHOW CREATE TABLE" in sql or "pg_catalog" in sql for (sql, _p, _s) in engine.executed)
+
+
+async def test_get_tables_postgres_ddl_appends_indexes() -> None:
+    """Secondary indexes are appended to the reconstructed PostgreSQL DDL."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "integer")]},
+        ddl_columns={"users": [{"name": "id", "data_type": "integer", "not_null": True, "default_value": None}]},
+        primary_keys={"users": ["id"]},
+        ddl_indexes={"users": ["CREATE INDEX users_email_idx ON public.users USING btree (email)"]},
+    )
+    database = build_database(ddl_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl is not None
+    assert tables[0].ddl.startswith('CREATE TABLE "users"')
+    assert tables[0].ddl.endswith("CREATE INDEX users_email_idx ON public.users USING btree (email);")
+
+
+async def test_get_tables_postgres_foreign_keys() -> None:
+    """Foreign keys are reconstructed as deferred ALTER TABLE statements."""
+    engine = FakeEngine(
+        schema={"orders": [column_meta("id", "integer")]},
+        ddl_columns={"orders": [{"name": "id", "data_type": "integer", "not_null": True, "default_value": None}]},
+        primary_keys={"orders": ["id"]},
+        foreign_keys={
+            "orders": [{"name": "orders_user_fk", "definition": "FOREIGN KEY (user_id) REFERENCES users(id)"}]
+        },
+    )
+    database = build_database(ddl_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].foreign_keys == [
+        'ALTER TABLE "orders" ADD CONSTRAINT "orders_user_fk" FOREIGN KEY (user_id) REFERENCES users(id);'
+    ]
+
+
+async def test_get_tables_mysql_has_no_separate_foreign_keys() -> None:
+    """MySQL keeps foreign keys inside SHOW CREATE TABLE, so none are deferred."""
+    engine = FakeEngine(
+        schema={"orders": [column_meta("id", "int")]},
+        dialect_name="mysql",
+        create_statements={"orders": "CREATE TABLE `orders` (\n  `id` int NOT NULL\n)"},
+    )
+    config = make_config(connection_type="mysql", output={"type": "file", "location": "out", "ddl": True})
+    database = build_database(config, engine)
+    tables = await database.get_tables()
+    assert tables[0].foreign_keys == []
