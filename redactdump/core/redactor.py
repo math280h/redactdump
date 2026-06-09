@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Pattern, Union
 
 from faker import Faker
+from faker.exceptions import UniquenessException
 
+from redactdump.core.errors import RedactDumpError
 from redactdump.core.models import TableColumn
 
 # Environment variable supplying the consistency seed. It takes precedence
@@ -25,6 +27,8 @@ class CustomRule:
     pattern: Pattern
     arguments: Dict[str, Any] = field(default_factory=dict)
     consistent: bool = False
+    unique: bool = False
+    preserve_null: bool = False
 
 
 class Redactor:
@@ -114,6 +118,21 @@ class Redactor:
         if replacement is not None and not callable(getattr(self.fake, replacement, None)):
             sys.exit(f"{replacement} is not a valid replacement.")
 
+    @staticmethod
+    def validate_flags(rule: CustomRule, label: str) -> None:
+        """Abort with a message when a rule combines incompatible flags.
+
+        A consistent rule must give identical outputs for identical inputs,
+        while a unique rule must never repeat an output; both cannot hold
+        once an input value occurs twice.
+
+        Args:
+            rule (CustomRule): The loaded rule.
+            label (str): Identifies the rule in the error message.
+        """
+        if rule.unique and rule.consistent:
+            sys.exit(f"The rule for {label} cannot be both unique and consistent.")
+
     def load_rules(self) -> None:
         """Load redaction rules from the pattern groups and named table columns."""
         patterns = self.config["redact"].get("patterns", {})
@@ -128,7 +147,10 @@ class Redactor:
                     re.compile(pattern["pattern"]),
                     arguments,
                     bool(pattern.get("consistent")),
+                    bool(pattern.get("unique")),
+                    bool(pattern.get("preserve_null")),
                 )
+                self.validate_flags(rule, f"pattern {pattern['pattern']}")
                 if category == "data":
                     self.data_rules.append(rule)
                 elif category == "column":
@@ -143,7 +165,10 @@ class Redactor:
                     replacement,
                     re.compile(f"^{re.escape(named['name'])}$"),
                     consistent=bool(named.get("consistent")),
+                    unique=bool(named.get("unique")),
+                    preserve_null=bool(named.get("preserve_null")),
                 )
+                self.validate_flags(rule, f"column {named['name']} of table {table_name}")
                 self.table_rules.setdefault(table_name, []).append(rule)
 
     def get_replacement(
@@ -152,6 +177,7 @@ class Redactor:
         arguments: Optional[Dict[str, Any]] = None,
         value: Any = None,
         consistent: bool = False,
+        unique: bool = False,
     ) -> Union[str, Any]:
         """Get replacement value.
 
@@ -162,6 +188,8 @@ class Redactor:
                 their output from it.
             consistent (bool): Map identical inputs to identical outputs by
                 seeding the generator from an HMAC of the original value.
+            unique (bool): Never repeat an output within the run, so the
+                dump replays into columns with a UNIQUE constraint.
         """
         if replacement is None:
             return "NULL"
@@ -170,8 +198,14 @@ class Redactor:
             self.consistent_fake.seed_instance(int.from_bytes(digest[:8], "big"))
             func = getattr(self.consistent_fake, replacement)
             return func(**(arguments or {}))
-        func = getattr(self.fake, replacement)
-        return func(**(arguments or {}))
+        func = getattr(self.fake.unique if unique else self.fake, replacement)
+        try:
+            return func(**(arguments or {}))
+        except UniquenessException:
+            raise RedactDumpError(
+                f"{replacement} ran out of unique values; "
+                "it cannot generate enough distinct outputs for the rows being dumped."
+            ) from None
 
     def redact(self, data: dict, columns: List[TableColumn], table_name: Optional[str] = None) -> list[TableColumn]:
         """Redact data.
@@ -198,7 +232,12 @@ class Redactor:
             for column in [
                 column for column in columns if rule.pattern.search(column.name) and column.name not in columns_redacted
             ]:
-                column.value = self.get_replacement(rule.replacement, rule.arguments, column.value, rule.consistent)
+                # A preserve_null rule keeps a NULL cell NULL but still claims
+                # the column, so no later rule fabricates a value for it.
+                if not (rule.preserve_null and column.value is None):
+                    column.value = self.get_replacement(
+                        rule.replacement, rule.arguments, column.value, rule.consistent, rule.unique
+                    )
                 columns_redacted.append(column.name)
 
         for rule in self.data_rules:
@@ -211,9 +250,10 @@ class Redactor:
                     continue
 
                 if rule.pattern.search(str(value)):
-                    discovered_column.value = self.get_replacement(
-                        rule.replacement, rule.arguments, value, rule.consistent
-                    )
+                    if not (rule.preserve_null and value is None):
+                        discovered_column.value = self.get_replacement(
+                            rule.replacement, rule.arguments, value, rule.consistent, rule.unique
+                        )
                     columns_redacted.append(discovered_column.name)
 
         return columns

@@ -140,13 +140,53 @@ Security notes:
 * Consistent redaction intentionally reveals equality: two rows sharing a
   fake value shared the real value. Use it only where that is acceptable.
 
+#### Unique replacements
+
+faker freely repeats values, so redacting a column that carries a UNIQUE
+constraint can produce a dump that fails to replay. Set `unique: true` on a
+rule to guarantee the rule never emits the same value twice within a run:
+
+````yaml
+redact:
+  patterns:
+    column:
+      - pattern: '^username$'
+        replacement: user_name
+        unique: true
+````
+
+If the replacement cannot produce enough distinct values for the rows being
+dumped, the run aborts with an error naming the provider. `unique` cannot be
+combined with `consistent`: a consistent rule must repeat its output whenever
+the input repeats, which contradicts uniqueness.
+
+#### Preserving NULLs
+
+By default a matching rule fabricates a value even when the original cell is
+NULL. Set `preserve_null: true` on a rule to keep NULL cells NULL, so the
+data's null distribution survives redaction:
+
+````yaml
+redact:
+  patterns:
+    column:
+      - pattern: '^phone'
+        replacement: phone_number
+        preserve_null: true
+````
+
+A preserved NULL still counts as handled: no later rule will fabricate a
+value for that column. Note that whether a cell is NULL is itself
+information (for example, a NULL `phone` reveals the user supplied no phone
+number); leave the flag off where that must not leak.
+
 #### Named columns per table
 
 `redact.columns` redacts specific columns of specific tables, without pattern
 matching. Each entry names the column (exact match) and the replacement to
 use; a `null` replacement writes `NULL`. These rules apply only to the named
 table and take precedence over `redact.patterns` rules for the same column.
-The entries accept `consistent: true` as well:
+The entries accept `consistent`, `unique` and `preserve_null` as well:
 
 ````yaml
 redact:
