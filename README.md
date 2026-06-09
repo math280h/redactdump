@@ -154,6 +154,20 @@ redact:
   (`TrustServerCertificate=yes`), matching the self-signed certificate SQL
   Server ships with.
 
+`connection.schema` selects the schema to dump. It defaults to `public` on
+PostgreSQL, `dbo` on SQL Server and the connection database on MySQL. When a
+schema is configured, the table names in the generated INSERT and DDL
+statements are schema-qualified so the dump replays into that same schema:
+
+````yaml
+connection:
+  type: pgsql
+  host: 127.0.0.1
+  port: 5432
+  database: postgres
+  schema: accounting
+````
+
 ### Example configuration:
 ````yaml
 connection:

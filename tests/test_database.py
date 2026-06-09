@@ -239,6 +239,61 @@ async def test_debug_logs_skipped_tables(capturing_console: CapturingConsole) ->
     assert "audit_log" in capturing_console.text
 
 
+def schema_config(**kwargs: Any) -> Dict[str, Any]:
+    """A config with an explicitly configured schema."""
+    config = make_config(**kwargs)
+    config["connection"]["schema"] = "accounting"
+    return config
+
+
+async def test_get_tables_uses_configured_schema() -> None:
+    """A configured schema overrides the engine default in every query."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
+    database = build_database(schema_config(), engine)
+    await database.get_tables()
+    bound = [params for (_sql, params, _stmt) in engine.executed if params]
+    assert bound and all(params.get("schema") == "accounting" for params in bound)
+
+
+async def test_get_tables_marks_tables_with_configured_schema() -> None:
+    """Tables carry the configured schema so output is qualified."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
+    database = build_database(schema_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].schema == "accounting"
+
+
+async def test_get_tables_leaves_schema_unset_by_default() -> None:
+    """Without a configured schema the tables stay unqualified."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
+    database = build_database(make_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].schema is None
+
+
+async def test_get_data_qualifies_table_with_schema() -> None:
+    """Data reads target the schema-qualified table."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]})
+    database = build_database(schema_config(), engine)
+    table = passthrough_table()
+    table.schema = "accounting"
+
+    rows = await database.get_data(table, 0, 100)
+    assert len(rows) == 1
+    select_sql = engine.executed[-1][0]
+    assert "FROM accounting.users" in select_sql
+
+
+async def test_count_rows_qualifies_table_with_schema() -> None:
+    """Row counts target the schema-qualified table."""
+    engine = FakeEngine(counts={"orders": 17})
+    database = build_database(schema_config(), engine)
+
+    assert await database.count_rows(Table("orders", [], schema="accounting")) == 17
+    count_sql = engine.executed[-1][0]
+    assert "FROM accounting.orders" in count_sql
+
+
 async def test_get_tables_applies_readonly_execution_options() -> None:
     """Connections used for reads are switched into readonly mode."""
     engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
@@ -591,6 +646,65 @@ def test_postgres_ddl_composite_primary_key() -> None:
     columns = [("a", "integer", True, None), ("b", "integer", True, None)]
     ddl = Database.postgres_ddl("pair", columns, ["a", "b"])
     assert ddl.endswith('    PRIMARY KEY ("a", "b")\n);')
+
+
+def test_postgres_ddl_qualifies_schema() -> None:
+    """A configured schema qualifies the PostgreSQL CREATE TABLE name."""
+    ddl = Database.postgres_ddl("users", [("id", "integer", True, None)], ["id"], "accounting")
+    assert ddl.startswith('CREATE TABLE "accounting"."users" (')
+
+
+def test_mssql_ddl_qualifies_schema() -> None:
+    """A configured schema qualifies the SQL Server CREATE TABLE name."""
+    ddl = Database.mssql_ddl("users", [("id", "int", True, None)], ["id"], "accounting")
+    assert ddl.startswith("CREATE TABLE [accounting].[users] (")
+
+
+def test_mssql_index_statements_qualify_schema() -> None:
+    """A configured schema qualifies the index target table."""
+    rows = [FakeRow({"index_name": "idx", "is_unique": False, "column_name": "email"})]
+    assert Database.mssql_index_statements("users", rows, "accounting") == [
+        "CREATE INDEX [idx] ON [accounting].[users] ([email]);"
+    ]
+
+
+def test_mssql_foreign_key_statements_qualify_schema() -> None:
+    """A configured schema qualifies both sides of a foreign key."""
+    rows = [FakeRow({"name": "fk", "column_name": "uid", "referenced_table": "users", "referenced_column": "id"})]
+    assert Database.mssql_foreign_key_statements("orders", rows, "accounting") == [
+        "ALTER TABLE [accounting].[orders] ADD CONSTRAINT [fk] "
+        "FOREIGN KEY ([uid]) REFERENCES [accounting].[users] ([id]);"
+    ]
+
+
+async def test_postgres_foreign_keys_qualify_configured_schema() -> None:
+    """Deferred PostgreSQL foreign keys target the qualified table."""
+    engine = FakeEngine(
+        schema={"orders": [column_meta("id", "integer")]},
+        ddl_columns={"orders": [{"name": "id", "data_type": "integer", "not_null": True, "default_value": None}]},
+        primary_keys={"orders": ["id"]},
+        foreign_keys={
+            "orders": [{"name": "orders_user_fk", "definition": "FOREIGN KEY (user_id) REFERENCES users(id)"}]
+        },
+    )
+    database = build_database(schema_config(output={"type": "file", "location": "out", "ddl": True}), engine)
+    tables = await database.get_tables()
+    assert tables[0].foreign_keys == [
+        'ALTER TABLE "accounting"."orders" ADD CONSTRAINT "orders_user_fk" FOREIGN KEY (user_id) REFERENCES users(id);'
+    ]
+
+
+async def test_mysql_show_create_table_is_schema_qualified() -> None:
+    """SHOW CREATE TABLE names the schema so a configured one reads right."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "int")]},
+        dialect_name="mysql",
+        create_statements={"users": "CREATE TABLE `users` (`id` int)"},
+    )
+    config = make_config(connection_type="mysql", output={"type": "file", "location": "out", "ddl": True})
+    database = build_database(config, engine)
+    await database.get_tables()
+    assert any("SHOW CREATE TABLE `test`.`users`" in sql for (sql, _p, _s) in engine.executed)
 
 
 async def test_get_tables_attaches_postgres_ddl() -> None:

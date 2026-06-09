@@ -275,6 +275,15 @@ def test_insert_statement_quotes_reserved_table_name() -> None:
     assert File.insert_statement(table, row, "mssql") == "INSERT INTO [Order] ([id]) VALUES (1);"
 
 
+def test_insert_statement_qualifies_configured_schema() -> None:
+    """A table carrying a schema produces schema-qualified INSERT statements."""
+    row = [TableColumn("id", "integer", False, "", 1)]
+    table = Table("users", [], schema="accounting")
+    assert File.insert_statement(table, row) == 'INSERT INTO "accounting"."users" ("id") VALUES (1);'
+    assert File.insert_statement(table, row, "mysql") == "INSERT INTO `accounting`.`users` (`id`) VALUES (1);"
+    assert File.insert_statement(table, row, "mssql") == "INSERT INTO [accounting].[users] ([id]) VALUES (1);"
+
+
 def test_insert_statement_uses_mysql_quoting() -> None:
     """The mysql dialect produces backtick-quoted identifiers."""
     row = [TableColumn("id", "integer", False, "", 1)]

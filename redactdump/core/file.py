@@ -346,7 +346,10 @@ class File:
             opening, closing = '"', '"'
         values = [File.format_value(column, dialect) for column in row]
         columns = ", ".join(f"{opening}{column.name}{closing}" for column in row)
-        return f"INSERT INTO {opening}{table.name}{closing} ({columns}) VALUES ({', '.join(values)});"
+        name = f"{opening}{table.name}{closing}"
+        if table.schema:
+            name = f"{opening}{table.schema}{closing}.{name}"
+        return f"INSERT INTO {name} ({columns}) VALUES ({', '.join(values)});"
 
     async def write_to_file(self, table: Table, rows: List[List[TableColumn]]) -> Union[str, None]:
         """Write data to file.
