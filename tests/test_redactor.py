@@ -306,3 +306,104 @@ def test_named_column_null_replacement_becomes_null() -> None:
     red = table_redactor({"users": [{"name": "ssn", "replacement": None}]})
     result = red.redact({"ssn": "123-45-6789"}, columns(("ssn", None)), "users")
     assert result[0].value == "NULL"
+
+
+CONSISTENT_EMAIL = {"column": [{"pattern": "^email$", "replacement": "uuid4", "consistent": True}]}
+
+
+def seeded_redactor(seed: str, patterns: Dict[str, Any]) -> Redactor:
+    """Build a Redactor with a configured consistency seed."""
+    return Redactor({"redact": {"seed": seed, "patterns": patterns}})
+
+
+def redact_email(red: Redactor, value: str) -> Any:
+    """Run a single email cell through the redactor and return the output."""
+    return red.redact({"email": value}, columns(("email", None)))[0].value
+
+
+def test_consistent_rule_maps_equal_inputs_equally() -> None:
+    """A consistent rule gives identical outputs for identical inputs."""
+    red = redactor(CONSISTENT_EMAIL)
+    assert redact_email(red, "a@x.com") == redact_email(red, "a@x.com")
+
+
+def test_consistent_rule_maps_distinct_inputs_distinctly() -> None:
+    """A consistent rule gives different outputs for different inputs."""
+    red = redactor(CONSISTENT_EMAIL)
+    assert redact_email(red, "a@x.com") != redact_email(red, "b@x.com")
+
+
+def test_random_rule_changes_per_row() -> None:
+    """Without the consistent flag the same input gets fresh values."""
+    red = redactor({"column": [{"pattern": "^email$", "replacement": "uuid4"}]})
+    assert redact_email(red, "a@x.com") != redact_email(red, "a@x.com")
+
+
+def test_consistent_seeding_does_not_affect_random_rules() -> None:
+    """Seeding for a consistent rule never makes random rules predictable."""
+    red = redactor(
+        {
+            "column": [
+                {"pattern": "^a$", "replacement": "uuid4", "consistent": True},
+                {"pattern": "^b$", "replacement": "uuid4"},
+            ]
+        }
+    )
+    first = red.redact({"a": "x", "b": "y"}, columns(("a", None), ("b", None)))[1].value
+    second = red.redact({"a": "x", "b": "y"}, columns(("a", None), ("b", None)))[1].value
+    assert first != second
+
+
+def test_same_seed_gives_same_mapping_across_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two redactors sharing a configured seed agree on the mapping."""
+    monkeypatch.delenv("REDACTDUMP_SEED", raising=False)
+    first = seeded_redactor("secret", CONSISTENT_EMAIL)
+    second = seeded_redactor("secret", CONSISTENT_EMAIL)
+    assert redact_email(first, "a@x.com") == redact_email(second, "a@x.com")
+
+
+def test_different_seeds_give_different_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Changing the seed changes every mapping."""
+    monkeypatch.delenv("REDACTDUMP_SEED", raising=False)
+    first = seeded_redactor("secret-one", CONSISTENT_EMAIL)
+    second = seeded_redactor("secret-two", CONSISTENT_EMAIL)
+    assert redact_email(first, "a@x.com") != redact_email(second, "a@x.com")
+
+
+def test_runs_without_seed_use_distinct_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a configured seed the per-run secret differs between runs."""
+    monkeypatch.delenv("REDACTDUMP_SEED", raising=False)
+    first = redactor(CONSISTENT_EMAIL)
+    second = redactor(CONSISTENT_EMAIL)
+    assert redact_email(first, "a@x.com") != redact_email(second, "a@x.com")
+
+
+def test_seed_env_var_overrides_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REDACTDUMP_SEED wins over redact.seed so secrets can stay external."""
+    monkeypatch.setenv("REDACTDUMP_SEED", "env-secret")
+    via_env = seeded_redactor("config-secret", CONSISTENT_EMAIL)
+    monkeypatch.delenv("REDACTDUMP_SEED")
+    via_config = seeded_redactor("env-secret", CONSISTENT_EMAIL)
+    assert redact_email(via_env, "a@x.com") == redact_email(via_config, "a@x.com")
+
+
+def test_consistent_data_rule_is_stable() -> None:
+    """The consistent flag works on data rules as well."""
+    red = redactor({"data": [{"pattern": "@x.com", "replacement": "uuid4", "consistent": True}]})
+    first = red.redact({"contact": "a@x.com"}, columns(("contact", None)))[0].value
+    second = red.redact({"contact": "a@x.com"}, columns(("contact", None)))[0].value
+    assert first == second
+
+
+def test_named_column_consistent_flag() -> None:
+    """The consistent flag works on redact.columns entries."""
+    red = table_redactor({"users": [{"name": "email", "replacement": "uuid4", "consistent": True}]})
+    first = red.redact({"email": "a@x.com"}, columns(("email", None)), "users")[0].value
+    second = red.redact({"email": "a@x.com"}, columns(("email", None)), "users")[0].value
+    assert first == second
+
+
+def test_consistent_null_replacement_still_null() -> None:
+    """A null replacement stays NULL regardless of the consistent flag."""
+    red = redactor({"column": [{"pattern": "^email$", "replacement": None, "consistent": True}]})
+    assert redact_email(red, "a@x.com") == "NULL"

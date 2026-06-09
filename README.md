@@ -107,12 +107,46 @@ redact:
             import: myapp.models.Status
 ````
 
+#### Consistent replacements
+
+By default every cell gets a fresh random value, so the same real value
+becomes a different fake value in every row. Set `consistent: true` on a rule
+to map identical inputs to identical outputs instead, stable across rows and
+tables, so joins, grouping and dedup on redacted columns keep working:
+
+````yaml
+redact:
+  patterns:
+    column:
+      - pattern: '^email$'
+        replacement: email
+        consistent: true
+````
+
+The output is derived by seeding the generator with HMAC-SHA256 over the
+original value, keyed with a secret. Without configuration the secret is
+random per run: identical values map consistently within one dump but
+differently on the next, and someone holding only the dump cannot recompute
+the mapping. To keep mappings stable across runs, provide the secret
+yourself, either as `redact.seed` or (preferably, so it stays out of config
+files) the `REDACTDUMP_SEED` environment variable, which takes precedence
+over the config key.
+
+Security notes:
+
+* Treat the seed like a password. Anyone holding it can recover originals of
+  guessable values (emails, phone numbers, sequential ids, ...) by
+  enumerating candidates and comparing the resulting fakes against the dump.
+* Consistent redaction intentionally reveals equality: two rows sharing a
+  fake value shared the real value. Use it only where that is acceptable.
+
 #### Named columns per table
 
 `redact.columns` redacts specific columns of specific tables, without pattern
 matching. Each entry names the column (exact match) and the replacement to
 use; a `null` replacement writes `NULL`. These rules apply only to the named
-table and take precedence over `redact.patterns` rules for the same column:
+table and take precedence over `redact.patterns` rules for the same column.
+The entries accept `consistent: true` as well:
 
 ````yaml
 redact:
@@ -120,6 +154,7 @@ redact:
     users:
       - name: email
         replacement: email
+        consistent: true
       - name: ssn
         replacement: null
 ````

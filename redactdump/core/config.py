@@ -53,6 +53,7 @@ class NamedColumn(StrictModel):
 
     name: str
     replacement: Optional[str]
+    consistent: Optional[bool] = None
 
 
 class PatternRule(StrictModel):
@@ -61,6 +62,7 @@ class PatternRule(StrictModel):
     pattern: str
     replacement: Optional[str]
     arguments: Optional[Dict[str, Any]] = None
+    consistent: Optional[bool] = None
 
 
 class PatternsConfig(StrictModel):
@@ -76,6 +78,7 @@ class RedactConfig(StrictModel):
     providers: Optional[List[str]] = None
     columns: Optional[Dict[str, List[NamedColumn]]] = None
     patterns: Optional[PatternsConfig] = None
+    seed: Optional[str] = None
 
 
 class OutputConfig(StrictModel):

@@ -250,3 +250,37 @@ def test_validation_error_names_failing_key(tmp_path: Path) -> None:
     path.write_text(yaml.safe_dump(data))
     with pytest.raises(RedactDumpError, match=r"output\.type"):
         Config(str(path)).load_config()
+
+
+def test_consistent_flag_accepted(tmp_path: Path) -> None:
+    """The consistent flag validates on pattern and named column rules."""
+    data = base_config()
+    data["redact"]["patterns"] = {"column": [{"pattern": "^email$", "replacement": "email", "consistent": True}]}
+    data["redact"]["columns"] = {"users": [{"name": "email", "replacement": "email", "consistent": True}]}
+    result = load(tmp_path, data)
+    assert result["redact"]["patterns"]["column"][0]["consistent"] is True
+    assert result["redact"]["columns"]["users"][0]["consistent"] is True
+
+
+def test_non_bool_consistent_rejected(tmp_path: Path) -> None:
+    """A non-boolean consistent flag violates the schema."""
+    data = base_config()
+    data["redact"]["patterns"] = {"column": [{"pattern": "^email$", "replacement": "email", "consistent": "yes"}]}
+    with pytest.raises(RedactDumpError):
+        load(tmp_path, data)
+
+
+def test_redact_seed_accepted(tmp_path: Path) -> None:
+    """The redact.seed key validates and is preserved."""
+    data = base_config()
+    data["redact"]["seed"] = "secret"
+    result = load(tmp_path, data)
+    assert result["redact"]["seed"] == "secret"
+
+
+def test_non_string_redact_seed_rejected(tmp_path: Path) -> None:
+    """A non-string seed violates the schema."""
+    data = base_config()
+    data["redact"]["seed"] = 42
+    with pytest.raises(RedactDumpError):
+        load(tmp_path, data)
