@@ -51,6 +51,23 @@ https://faker.readthedocs.io/en/stable/providers.html
 
 **NOTE: redactdump is currently NOT tested with all providers, some might trigger bugs**
 
+#### Community providers
+
+faker's [community providers](https://faker.readthedocs.io/en/stable/communityproviders.html)
+are also supported. Install the provider package alongside redactdump and list
+the provider classes (as dotted import paths) under `redact.providers`. Their
+methods then become available as `replacement` values.
+
+````yaml
+redact:
+  providers:
+    - faker_vehicle.VehicleProvider
+  patterns:
+    column:
+      - pattern: '^car_model'
+        replacement: vehicle_make
+````
+
 ### Example configuration:
 ````yaml
 connection:

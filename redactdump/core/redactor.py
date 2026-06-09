@@ -1,3 +1,4 @@
+import importlib
 import re
 import sys
 from dataclasses import dataclass
@@ -30,7 +31,29 @@ class Redactor:
 
         self.data_rules: List[CustomRule] = []
         self.column_rules: List[CustomRule] = []
+        self.load_providers()
         self.load_rules()
+
+    def load_providers(self) -> None:
+        """Register faker community providers declared in the config.
+
+        Each entry is a dotted import path to a provider class
+        (e.g. faker_vehicle.VehicleProvider). The class is imported and added
+        to the faker instance so its methods become valid replacements.
+        """
+        providers = self.config["redact"].get("providers") or []
+        for dotted_path in providers:
+            module_path, _, class_name = dotted_path.rpartition(".")
+            if not module_path or not class_name:
+                sys.exit(f"{dotted_path} is not a valid provider path.")
+
+            try:
+                module = importlib.import_module(module_path)
+                provider = getattr(module, class_name)
+            except (ImportError, AttributeError):
+                sys.exit(f"{dotted_path} could not be loaded as a faker provider.")
+
+            self.fake.add_provider(provider)
 
     def load_rules(self) -> None:
         """Load redaction rules from the optional column and data pattern groups."""

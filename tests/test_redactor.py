@@ -52,6 +52,54 @@ def test_invalid_replacement_exits() -> None:
         redactor({"data": [{"pattern": "x", "replacement": "definitely_not_a_provider"}]})
 
 
+def community_redactor(providers: List[str], patterns: Dict[str, Any]) -> Redactor:
+    """Build a Redactor that also registers community providers."""
+    return Redactor({"redact": {"providers": providers, "patterns": patterns}})
+
+
+def test_community_provider_method_becomes_valid_replacement() -> None:
+    """A registered community provider makes its methods usable as replacements."""
+    red = community_redactor(
+        ["community_provider.WidgetProvider"],
+        {"column": [{"pattern": "_widget", "replacement": "widget_name"}]},
+    )
+    assert len(red.column_rules) == 1
+    assert red.get_replacement("widget_name") == "redactdump-widget"
+
+
+def test_community_provider_unknown_method_still_rejected() -> None:
+    """Registering a provider does not whitelist unrelated replacement names."""
+    with pytest.raises(SystemExit):
+        community_redactor(
+            ["community_provider.WidgetProvider"],
+            {"data": [{"pattern": "x", "replacement": "not_a_widget_method"}]},
+        )
+
+
+def test_unimportable_provider_module_exits() -> None:
+    """A provider whose module cannot be imported aborts loading."""
+    with pytest.raises(SystemExit):
+        community_redactor(["definitely_not_a_module.Provider"], {})
+
+
+def test_missing_provider_class_exits() -> None:
+    """A provider class missing from an importable module aborts loading."""
+    with pytest.raises(SystemExit):
+        community_redactor(["community_provider.NotAProvider"], {})
+
+
+def test_provider_path_without_module_exits() -> None:
+    """A provider path with no module component aborts loading."""
+    with pytest.raises(SystemExit):
+        community_redactor(["WidgetProvider"], {})
+
+
+def test_no_providers_key_loads_without_registration() -> None:
+    """A config without a providers key loads normally."""
+    red = redactor({"data": [{"pattern": "x", "replacement": "name"}]})
+    assert len(red.data_rules) == 1
+
+
 def test_none_replacement_loads_without_faker_validation() -> None:
     """A null replacement is stored as a rule without provider validation."""
     red = redactor({"data": [{"pattern": "x", "replacement": None}]})
