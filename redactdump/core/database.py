@@ -1,9 +1,9 @@
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import quote_plus
 
 from rich.console import Console
 from sqlalchemy import select, text
 from sqlalchemy import table as sql_table
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from redactdump.core.models import Table, TableColumn
@@ -135,29 +135,32 @@ class Database:
 
         self.redactor = Redactor(config)
 
-        query = ""
+        query: Dict[str, str] = {}
         if self.config["connection"]["type"] == "postgresql" or self.config["connection"]["type"] == "pgsql":
-            engine = "postgresql+psycopg://"
+            drivername = "postgresql+psycopg"
         elif self.config["connection"]["type"] == "mysql":
-            engine = "mysql+aiomysql://"
+            drivername = "mysql+aiomysql"
         elif self.config["connection"]["type"] == "mssql":
-            engine = "mssql+aioodbc://"
+            drivername = "mssql+aioodbc"
             # Driver 18 encrypts by default and rejects the self-signed
             # certificate SQL Server ships with, so trust it explicitly.
             driver = self.config["connection"].get("driver") or MSSQL_DEFAULT_DRIVER
-            query = f"?driver={quote_plus(driver)}&TrustServerCertificate=yes"
+            query = {"driver": driver, "TrustServerCertificate": "yes"}
         else:
             raise Exception("Unsupported database engine")
 
-        self.engine: AsyncEngine = create_async_engine(
-            f"{engine}{self.config['connection']['username']}:"
-            f"{self.config['connection']['password']}@"
-            f"{self.config['connection']['host']}:"
-            f"{self.config['connection']['port']}/"
-            f"{self.config['connection']['database']}"
-            f"{query}",
-            echo=False,
+        # URL.create escapes every component, so credentials containing
+        # reserved characters (@, /, :, #) survive the round trip.
+        url = URL.create(
+            drivername,
+            username=self.config["connection"]["username"],
+            password=self.config["connection"]["password"],
+            host=self.config["connection"]["host"],
+            port=self.config["connection"]["port"],
+            database=self.config["connection"]["database"],
+            query=query,
         )
+        self.engine: AsyncEngine = create_async_engine(url, echo=False)
 
     async def dispose(self) -> None:
         """Dispose of the engine and its connection pool."""
