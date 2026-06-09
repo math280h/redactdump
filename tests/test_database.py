@@ -147,6 +147,98 @@ async def test_get_tables_uses_dbo_schema_on_mssql() -> None:
     assert bound and all(params.get("schema") == "dbo" for params in bound)
 
 
+async def test_get_tables_include_filter_keeps_exact_name() -> None:
+    """An include list restricts the dump to the named tables."""
+    schema = {"users": [column_meta("id", "integer")], "orders": [column_meta("id", "integer")]}
+    engine = FakeEngine(schema=schema)
+    database = build_database(make_config(limits={"tables": ["users"]}), engine)
+
+    tables = await database.get_tables()
+    assert [table.name for table in tables] == ["users"]
+
+
+async def test_get_tables_include_filter_accepts_regex() -> None:
+    """An include entry works as a regex over the whole table name."""
+    schema = {
+        "orders_2023": [column_meta("id", "integer")],
+        "orders_2024": [column_meta("id", "integer")],
+        "users": [column_meta("id", "integer")],
+    }
+    engine = FakeEngine(schema=schema)
+    database = build_database(make_config(limits={"tables": ["orders_.*"]}), engine)
+
+    tables = await database.get_tables()
+    assert [table.name for table in tables] == ["orders_2023", "orders_2024"]
+
+
+async def test_get_tables_exclude_filter_skips_tables() -> None:
+    """An exclude list drops matching tables from the dump."""
+    schema = {
+        "users": [column_meta("id", "integer")],
+        "audit_log": [column_meta("id", "integer")],
+        "alembic_version": [column_meta("id", "integer")],
+    }
+    engine = FakeEngine(schema=schema)
+    database = build_database(make_config(limits={"exclude_tables": ["audit_.*", "alembic_version"]}), engine)
+
+    tables = await database.get_tables()
+    assert [table.name for table in tables] == ["users"]
+
+
+async def test_get_tables_exclude_wins_over_include() -> None:
+    """A table matched by both lists is excluded."""
+    schema = {"users": [column_meta("id", "integer")], "audit_log": [column_meta("id", "integer")]}
+    engine = FakeEngine(schema=schema)
+    database = build_database(
+        make_config(limits={"tables": ["users", "audit_log"], "exclude_tables": ["audit_log"]}), engine
+    )
+
+    tables = await database.get_tables()
+    assert [table.name for table in tables] == ["users"]
+
+
+async def test_table_filter_requires_full_match() -> None:
+    """A plain entry is an exact name, not a substring match."""
+    schema = {"users": [column_meta("id", "integer")], "users_archive": [column_meta("id", "integer")]}
+    engine = FakeEngine(schema=schema)
+    database = build_database(make_config(limits={"tables": ["users"]}), engine)
+
+    tables = await database.get_tables()
+    assert [table.name for table in tables] == ["users"]
+
+
+def test_invalid_table_filter_pattern_raises() -> None:
+    """An unparsable filter entry is rejected with the limits key named."""
+    with pytest.raises(RedactDumpError, match=r"limits\.tables"):
+        build_database(make_config(limits={"tables": ["("]}), FakeEngine())
+    with pytest.raises(RedactDumpError, match=r"limits\.exclude_tables"):
+        build_database(make_config(limits={"exclude_tables": ["("]}), FakeEngine())
+
+
+async def test_filtered_tables_get_no_metadata_queries() -> None:
+    """Skipped tables are filtered before any per-table queries run."""
+    schema = {"users": [column_meta("id", "integer")], "skipped": [column_meta("id", "integer")]}
+    engine = FakeEngine(schema=schema)
+    database = build_database(make_config(limits={"exclude_tables": ["skipped"]}), engine)
+
+    await database.get_tables()
+    bound = [params for (_sql, params, _stmt) in engine.executed if params]
+    assert not any("skipped" in (params.get("table_name"), params.get("table")) for params in bound)
+
+
+async def test_debug_logs_skipped_tables(capturing_console: CapturingConsole) -> None:
+    """Debug mode reports which tables the filters skipped."""
+    schema = {"users": [column_meta("id", "integer")], "audit_log": [column_meta("id", "integer")]}
+    engine = FakeEngine(schema=schema)
+    database = build_database(
+        make_config(debug=True, limits={"exclude_tables": ["audit_log"]}), engine, console=capturing_console.console
+    )
+
+    await database.get_tables()
+    assert "Skipping table" in capturing_console.text
+    assert "audit_log" in capturing_console.text
+
+
 async def test_get_tables_applies_readonly_execution_options() -> None:
     """Connections used for reads are switched into readonly mode."""
     engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})

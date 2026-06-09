@@ -1,6 +1,6 @@
 import re
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Pattern, Sequence, Set, Tuple
 
 from rich.console import Console
 from sqlalchemy import select, text
@@ -143,6 +143,10 @@ class Database:
         self.redactor = Redactor(config)
         self.warned_tables: Set[str] = set()
 
+        limits = self.config.get("limits", {})
+        self.include_tables = self.compile_table_filters(limits.get("tables"), "tables")
+        self.exclude_tables = self.compile_table_filters(limits.get("exclude_tables"), "exclude_tables")
+
         query: Dict[str, str] = {}
         if self.config["connection"]["type"] == "postgresql" or self.config["connection"]["type"] == "pgsql":
             drivername = "postgresql+psycopg"
@@ -176,6 +180,47 @@ class Database:
     async def dispose(self) -> None:
         """Dispose of the engine and its connection pool."""
         await self.engine.dispose()
+
+    @staticmethod
+    def compile_table_filters(patterns: Optional[List[str]], key: str) -> List[Pattern[str]]:
+        """Compile table filter entries, treating each as an anchored regex.
+
+        An entry must match the whole table name, so a plain name like
+        "users" behaves as an exact match while "audit_.*" works as a
+        pattern.
+
+        Args:
+            patterns (Optional[List[str]]): The configured filter entries.
+            key (str): The limits key the entries came from, for messages.
+
+        Returns:
+            List[Pattern[str]]: The compiled patterns.
+        """
+        compiled = []
+        for pattern in patterns or []:
+            try:
+                compiled.append(re.compile(pattern))
+            except re.error as exc:
+                raise RedactDumpError(f"Invalid pattern in limits.{key}: '{pattern}' ({exc})") from None
+        return compiled
+
+    def table_selected(self, name: str) -> bool:
+        """Decide whether a table passes the include/exclude filters.
+
+        Exclusion wins over inclusion; without an include list every table
+        not excluded is selected.
+
+        Args:
+            name (str): The table name.
+
+        Returns:
+            bool: True when the table should be dumped.
+        """
+        if any(pattern.fullmatch(name) for pattern in self.exclude_tables):
+            return False
+        if self.include_tables:
+            return any(pattern.fullmatch(name) for pattern in self.include_tables)
+        return True
 
     @asynccontextmanager
     async def table_connection(self) -> AsyncIterator[Any]:
@@ -219,6 +264,11 @@ class Database:
                 )
 
                 for table in result:
+                    if not self.table_selected(table[0]):
+                        if self.config["debug"]["enabled"]:
+                            self.console.print(f"[cyan]DEBUG: Skipping table (table filters): {table[0]}[/cyan]")
+                        continue
+
                     table_columns = []
                     columns = await conn.execute(
                         text(

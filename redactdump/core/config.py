@@ -25,10 +25,12 @@ class ConnectionConfig(StrictModel):
 
 
 class LimitsConfig(StrictModel):
-    """Optional row and column limits."""
+    """Optional row, column and table limits."""
 
     max_rows_per_table: Optional[int] = None
     select_columns: Optional[List[str]] = None
+    tables: Optional[List[str]] = None
+    exclude_tables: Optional[List[str]] = None
 
 
 class PerformanceConfig(StrictModel):
