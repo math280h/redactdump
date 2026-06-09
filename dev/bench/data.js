@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781035631780,
+  "lastUpdate": 1781036549381,
   "repoUrl": "https://github.com/math280h/redactdump",
   "entries": {
     "redactdump": [
@@ -450,6 +450,36 @@ window.BENCHMARK_DATA = {
             "value": 3807.61,
             "unit": "rows/sec",
             "extra": "rows=50000 tables=4 iterations=5 median=13.132s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "1547127+math280h@users.noreply.github.com",
+            "name": "Mathias V. Nielsen",
+            "username": "math280h"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "088fa74f9c1e059e41d3bb17e3d0685b9e8eb8b2",
+          "message": "feat: configurable schema (#71)",
+          "timestamp": "2026-06-09T16:20:54-04:00",
+          "tree_id": "61d848d723d46de4279638c2bcee3ca07a366bec",
+          "url": "https://github.com/math280h/redactdump/commit/088fa74f9c1e059e41d3bb17e3d0685b9e8eb8b2"
+        },
+        "date": 1781036548971,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PostgreSQL dump throughput",
+            "value": 4528.05,
+            "unit": "rows/sec",
+            "extra": "rows=50000 tables=4 iterations=5 median=11.042s"
           }
         ]
       }
