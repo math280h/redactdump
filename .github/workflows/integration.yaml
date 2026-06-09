@@ -18,11 +18,21 @@ jobs:
           - database: postgresql
             image: "postgres:16"
             port: 5432
+            user: test
+            password: secret
             options: '--health-cmd "pg_isready -U test" --health-interval 10s --health-timeout 5s --health-retries 10'
           - database: mysql
             image: "mysql:8"
             port: 3306
+            user: test
+            password: secret
             options: '--health-cmd "mysqladmin ping --silent" --health-interval 10s --health-timeout 5s --health-retries 10'
+          - database: mssql
+            image: "mcr.microsoft.com/mssql/server:2025-CU5-GDR1-ubuntu-24.04"
+            port: 1433
+            user: sa
+            password: RedactSecret123
+            options: '--health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P RedactSecret123 -C -Q ''SELECT 1'' -b" --health-interval 10s --health-timeout 5s --health-retries 10'
 
     services:
       db:
@@ -37,11 +47,23 @@ jobs:
           MYSQL_USER: test
           MYSQL_PASSWORD: secret
           MYSQL_DATABASE: test
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: RedactSecret123
         options: "${{ matrix.options }}"
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+    - name: Install ODBC Driver 18 for SQL Server
+      if: matrix.database == 'mssql'
+      run: |
+        if ! odbcinst -q -d -n "ODBC Driver 18 for SQL Server" 2>/dev/null; then
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+        fi
 
     - name: Install uv
       uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
@@ -54,7 +76,7 @@ jobs:
         INTEGRATION_DB: "${{ matrix.database }}"
         INTEGRATION_HOST: 127.0.0.1
         INTEGRATION_PORT: "${{ matrix.port }}"
-        INTEGRATION_USER: test
-        INTEGRATION_PASSWORD: secret
+        INTEGRATION_USER: "${{ matrix.user }}"
+        INTEGRATION_PASSWORD: "${{ matrix.password }}"
         INTEGRATION_DATABASE: test
       run: uv run pytest -m integration --no-cov

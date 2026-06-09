@@ -18,3 +18,11 @@ services:
       MYSQL_DATABASE: "test"
     ports:
       - "3306:3306"
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2025-CU5-GDR1-ubuntu-24.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "RedactSecret123"
+    ports:
+      - "1433:1433"

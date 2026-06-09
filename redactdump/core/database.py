@@ -1,4 +1,5 @@
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from urllib.parse import quote_plus
 
 from rich.console import Console
 from sqlalchemy import select, text
@@ -53,6 +54,71 @@ WHERE c.conrelid = (quote_ident(:schema) || '.' || quote_ident(:table))::regclas
 ORDER BY c.conname
 """
 
+# SQL Server has no SHOW CREATE TABLE either; the column list carries the type
+# arguments (length, precision/scale, fractional seconds) needed to render the
+# exact type. CHARACTER_MAXIMUM_LENGTH is -1 for the (max) variants.
+MSSQL_COLUMNS_SQL = """
+SELECT COLUMN_NAME AS name,
+       DATA_TYPE AS data_type,
+       CHARACTER_MAXIMUM_LENGTH AS char_length,
+       NUMERIC_PRECISION AS numeric_precision,
+       NUMERIC_SCALE AS numeric_scale,
+       DATETIME_PRECISION AS datetime_precision,
+       IS_NULLABLE AS is_nullable,
+       COLUMN_DEFAULT AS default_value
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = :table AND TABLE_SCHEMA = :schema
+ORDER BY ORDINAL_POSITION
+"""
+
+MSSQL_PRIMARY_KEY_SQL = """
+SELECT kcu.COLUMN_NAME AS name
+FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+  ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+ AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA
+ AND kcu.TABLE_NAME = tc.TABLE_NAME
+WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+  AND tc.TABLE_NAME = :table AND tc.TABLE_SCHEMA = :schema
+ORDER BY kcu.ORDINAL_POSITION
+"""
+
+# One row per key column of each secondary index; rows are regrouped into
+# CREATE INDEX statements in Python. Unique constraints and the primary key
+# are excluded (the primary key is already part of the table body).
+MSSQL_INDEXES_SQL = """
+SELECT i.name AS index_name, i.is_unique AS is_unique, c.name AS column_name
+FROM sys.indexes i
+JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+WHERE i.object_id = OBJECT_ID(QUOTENAME(:schema) + '.' + QUOTENAME(:table))
+  AND i.is_primary_key = 0 AND i.is_unique_constraint = 0 AND i.type > 0
+  AND ic.is_included_column = 0
+ORDER BY i.index_id, ic.key_ordinal
+"""
+
+# One row per column pair of each foreign key, regrouped in Python so
+# composite keys become a single ALTER TABLE statement.
+MSSQL_FOREIGN_KEYS_SQL = """
+SELECT fk.name AS name, pc.name AS column_name,
+       OBJECT_NAME(fk.referenced_object_id) AS referenced_table,
+       rc.name AS referenced_column
+FROM sys.foreign_keys fk
+JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+WHERE fk.parent_object_id = OBJECT_ID(QUOTENAME(:schema) + '.' + QUOTENAME(:table))
+ORDER BY fk.name, fkc.constraint_column_id
+"""
+
+MSSQL_SIZED_TYPES = frozenset({"char", "nchar", "varchar", "nvarchar", "binary", "varbinary"})
+MSSQL_PRECISION_TYPES = frozenset({"decimal", "numeric"})
+MSSQL_FRACTIONAL_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
+
+# The default ODBC driver for SQL Server connections; override with
+# connection.driver if a different one is installed.
+MSSQL_DEFAULT_DRIVER = "ODBC Driver 18 for SQL Server"
+
 
 class Database:
     """Database class for RedactDump."""
@@ -69,10 +135,17 @@ class Database:
 
         self.redactor = Redactor(config)
 
+        query = ""
         if self.config["connection"]["type"] == "postgresql" or self.config["connection"]["type"] == "pgsql":
             engine = "postgresql+psycopg://"
         elif self.config["connection"]["type"] == "mysql":
             engine = "mysql+aiomysql://"
+        elif self.config["connection"]["type"] == "mssql":
+            engine = "mssql+aioodbc://"
+            # Driver 18 encrypts by default and rejects the self-signed
+            # certificate SQL Server ships with, so trust it explicitly.
+            driver = self.config["connection"].get("driver") or MSSQL_DEFAULT_DRIVER
+            query = f"?driver={quote_plus(driver)}&TrustServerCertificate=yes"
         else:
             raise Exception("Unsupported database engine")
 
@@ -81,7 +154,8 @@ class Database:
             f"{self.config['connection']['password']}@"
             f"{self.config['connection']['host']}:"
             f"{self.config['connection']['port']}/"
-            f"{self.config['connection']['database']}",
+            f"{self.config['connection']['database']}"
+            f"{query}",
             echo=False,
         )
 
@@ -95,7 +169,12 @@ class Database:
         Returns:
             List[str]: A list of tables.
         """
-        schema = self.config["connection"]["database"] if self.engine.dialect.name == "mysql" else "public"
+        if self.engine.dialect.name == "mysql":
+            schema = self.config["connection"]["database"]
+        elif self.engine.dialect.name == "mssql":
+            schema = "dbo"
+        else:
+            schema = "public"
         tables: List[Table] = []
         async with self.engine.connect() as conn:
             conn = await conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
@@ -140,6 +219,38 @@ class Database:
         return tables
 
     @staticmethod
+    def assemble_ddl(
+        table_name: str,
+        columns: Sequence[Tuple[str, str, bool, Optional[str]]],
+        primary_key: Sequence[str],
+        quote: Callable[[str], str],
+    ) -> str:
+        """Assemble a CREATE TABLE statement from reconstructed column metadata.
+
+        Args:
+            table_name (str): Name of the table.
+            columns (Sequence): (name, type, not_null, default) per column, in order.
+            primary_key (Sequence[str]): Primary key column names, in key order.
+            quote (Callable): Renders an identifier quoted for the dialect.
+
+        Returns:
+            str: The CREATE TABLE statement.
+        """
+        definitions = []
+        for name, data_type, not_null, default_value in columns:
+            definition = f"    {quote(name)} {data_type}"
+            if not_null:
+                definition += " NOT NULL"
+            if default_value is not None:
+                definition += f" DEFAULT {default_value}"
+            definitions.append(definition)
+        if primary_key:
+            keys = ", ".join(quote(name) for name in primary_key)
+            definitions.append(f"    PRIMARY KEY ({keys})")
+        body = ",\n".join(definitions)
+        return f"CREATE TABLE {quote(table_name)} (\n{body}\n);"
+
+    @staticmethod
     def postgres_ddl(
         table_name: str,
         columns: Sequence[Tuple[str, str, bool, Optional[str]]],
@@ -155,26 +266,111 @@ class Database:
         Returns:
             str: The CREATE TABLE statement.
         """
-        definitions = []
-        for name, data_type, not_null, default_value in columns:
-            definition = f'    "{name}" {data_type}'
-            if not_null:
-                definition += " NOT NULL"
-            if default_value is not None:
-                definition += f" DEFAULT {default_value}"
-            definitions.append(definition)
-        if primary_key:
-            keys = ", ".join(f'"{name}"' for name in primary_key)
-            definitions.append(f"    PRIMARY KEY ({keys})")
-        body = ",\n".join(definitions)
-        return f'CREATE TABLE "{table_name}" (\n{body}\n);'
+        return Database.assemble_ddl(table_name, columns, primary_key, lambda name: f'"{name}"')
+
+    @staticmethod
+    def mssql_ddl(
+        table_name: str,
+        columns: Sequence[Tuple[str, str, bool, Optional[str]]],
+        primary_key: Sequence[str],
+    ) -> str:
+        """Assemble a SQL Server CREATE TABLE from reconstructed column metadata.
+
+        Args:
+            table_name (str): Name of the table.
+            columns (Sequence): (name, type, not_null, default) per column, in order.
+            primary_key (Sequence[str]): Primary key column names, in key order.
+
+        Returns:
+            str: The CREATE TABLE statement.
+        """
+        return Database.assemble_ddl(table_name, columns, primary_key, lambda name: f"[{name}]")
+
+    @staticmethod
+    def mssql_column_type(
+        data_type: str,
+        char_length: Optional[int],
+        numeric_precision: Optional[int],
+        numeric_scale: Optional[int],
+        datetime_precision: Optional[int],
+    ) -> str:
+        """Render an exact SQL Server type from INFORMATION_SCHEMA metadata.
+
+        Args:
+            data_type (str): Base type name (e.g. nvarchar, decimal).
+            char_length (Optional[int]): Character/byte length, -1 for (max).
+            numeric_precision (Optional[int]): Precision for decimal types.
+            numeric_scale (Optional[int]): Scale for decimal types.
+            datetime_precision (Optional[int]): Fractional seconds precision.
+
+        Returns:
+            str: The full type, including arguments where the type takes them.
+        """
+        if data_type in MSSQL_SIZED_TYPES and char_length is not None:
+            size = "max" if char_length == -1 else str(char_length)
+            return f"{data_type}({size})"
+        if data_type in MSSQL_PRECISION_TYPES and numeric_precision is not None:
+            return f"{data_type}({numeric_precision},{numeric_scale})"
+        if data_type in MSSQL_FRACTIONAL_TYPES and datetime_precision is not None:
+            return f"{data_type}({datetime_precision})"
+        return data_type
+
+    @staticmethod
+    def mssql_index_statements(table_name: str, rows: Sequence[Any]) -> List[str]:
+        """Regroup per-column index rows into CREATE INDEX statements.
+
+        Args:
+            table_name (str): Name of the table.
+            rows (Sequence): (index_name, is_unique, column_name) per key column.
+
+        Returns:
+            List[str]: One CREATE [UNIQUE] INDEX statement per index.
+        """
+        indexes: Dict[str, Tuple[bool, List[str]]] = {}
+        for row in rows:
+            entry = indexes.setdefault(row.index_name, (bool(row.is_unique), []))
+            entry[1].append(row.column_name)
+        statements = []
+        for name, (is_unique, column_names) in indexes.items():
+            unique = "UNIQUE " if is_unique else ""
+            columns = ", ".join(f"[{column}]" for column in column_names)
+            statements.append(f"CREATE {unique}INDEX [{name}] ON [{table_name}] ({columns});")
+        return statements
+
+    @staticmethod
+    def mssql_foreign_key_statements(table_name: str, rows: Sequence[Any]) -> List[str]:
+        """Regroup per-column foreign key rows into ALTER TABLE statements.
+
+        Args:
+            table_name (str): Name of the table.
+            rows (Sequence): (name, column_name, referenced_table, referenced_column)
+                per column pair, ordered by constraint and column position.
+
+        Returns:
+            List[str]: One ALTER TABLE ... ADD CONSTRAINT statement per key.
+        """
+        constraints: Dict[str, Tuple[str, List[str], List[str]]] = {}
+        for row in rows:
+            entry = constraints.setdefault(row.name, (row.referenced_table, [], []))
+            entry[1].append(row.column_name)
+            entry[2].append(row.referenced_column)
+        statements = []
+        for name, (referenced_table, column_names, referenced_names) in constraints.items():
+            columns = ", ".join(f"[{column}]" for column in column_names)
+            referenced = ", ".join(f"[{column}]" for column in referenced_names)
+            statements.append(
+                f"ALTER TABLE [{table_name}] ADD CONSTRAINT [{name}] "
+                f"FOREIGN KEY ({columns}) REFERENCES [{referenced_table}] ({referenced});"
+            )
+        return statements
 
     async def build_ddl(self, conn: Any, table_name: str, schema: str) -> str:
         """Build the CREATE TABLE DDL for a table using the database itself.
 
         MySQL exposes the authoritative definition through SHOW CREATE TABLE.
-        PostgreSQL has no such statement, so the definition is reconstructed
-        from pg_catalog (exact types, nullability, defaults and primary key).
+        PostgreSQL and SQL Server have no such statement, so the definition is
+        reconstructed from their catalogs (exact types, nullability, defaults
+        and primary key).
 
         Args:
             conn (AsyncConnection): An open read connection.
@@ -189,6 +385,9 @@ class Database:
             create_statement = list(result)[0][1]
             return f"{create_statement};"
 
+        if self.engine.dialect.name == "mssql":
+            return await self.build_mssql_ddl(conn, table_name, schema)
+
         columns_result = await conn.execute(text(POSTGRES_COLUMNS_SQL), {"schema": schema, "table": table_name})
         columns = [(row.name, row.data_type, row.not_null, row.default_value) for row in columns_result]
         key_result = await conn.execute(text(POSTGRES_PRIMARY_KEY_SQL), {"schema": schema, "table": table_name})
@@ -201,12 +400,54 @@ class Database:
             ddl += "\n" + "\n".join(f"{statement};" for statement in indexes)
         return ddl
 
+    async def build_mssql_ddl(self, conn: Any, table_name: str, schema: str) -> str:
+        """Reconstruct the CREATE TABLE DDL for a SQL Server table.
+
+        Identity properties are not reproduced; identity columns come out as
+        their base type so the dumped rows can be replayed without
+        SET IDENTITY_INSERT.
+
+        Args:
+            conn (AsyncConnection): An open read connection.
+            table_name (str): Name of the table.
+            schema (str): Schema the table lives in.
+
+        Returns:
+            str: The CREATE TABLE statement, plus any secondary indexes.
+        """
+        columns_result = await conn.execute(text(MSSQL_COLUMNS_SQL), {"schema": schema, "table": table_name})
+        columns = [
+            (
+                row.name,
+                self.mssql_column_type(
+                    row.data_type,
+                    row.char_length,
+                    row.numeric_precision,
+                    row.numeric_scale,
+                    row.datetime_precision,
+                ),
+                row.is_nullable == "NO",
+                row.default_value,
+            )
+            for row in columns_result
+        ]
+        key_result = await conn.execute(text(MSSQL_PRIMARY_KEY_SQL), {"schema": schema, "table": table_name})
+        primary_key = [row.name for row in key_result]
+        ddl = self.mssql_ddl(table_name, columns, primary_key)
+
+        index_result = await conn.execute(text(MSSQL_INDEXES_SQL), {"schema": schema, "table": table_name})
+        indexes = self.mssql_index_statements(table_name, list(index_result))
+        if indexes:
+            ddl += "\n" + "\n".join(indexes)
+        return ddl
+
     async def build_foreign_keys(self, conn: Any, table_name: str, schema: str) -> List[str]:
         """Return ALTER TABLE statements that add the table's foreign keys.
 
         MySQL already includes foreign keys in SHOW CREATE TABLE, so this only
-        reconstructs them for PostgreSQL. The statements are applied after all
-        data has been written so referenced rows already exist.
+        reconstructs them for PostgreSQL and SQL Server. The statements are
+        applied after all data has been written so referenced rows already
+        exist.
 
         Args:
             conn (AsyncConnection): An open read connection.
@@ -218,6 +459,9 @@ class Database:
         """
         if self.engine.dialect.name == "mysql":
             return []
+        if self.engine.dialect.name == "mssql":
+            result = await conn.execute(text(MSSQL_FOREIGN_KEYS_SQL), {"schema": schema, "table": table_name})
+            return self.mssql_foreign_key_statements(table_name, list(result))
         result = await conn.execute(text(POSTGRES_FOREIGN_KEYS_SQL), {"schema": schema, "table": table_name})
         return [f'ALTER TABLE "{table_name}" ADD CONSTRAINT "{row.name}" {row.definition};' for row in result]
 
@@ -270,9 +514,13 @@ class Database:
                         f"{table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
                     )
 
-                result = await conn.execute(
-                    select(text(select_value)).offset(offset).limit(limit).select_from(sql_table(table.name))
-                )
+                query = select(text(select_value)).offset(offset).limit(limit).select_from(sql_table(table.name))
+                if self.engine.dialect.name == "mssql":
+                    # SQL Server only supports OFFSET/FETCH after an ORDER BY;
+                    # (SELECT NULL) orders by nothing while satisfying that.
+                    query = query.order_by(text("(SELECT NULL)"))
+
+                result = await conn.execute(query)
                 records = [dict(row._mapping) for row in result]
                 for item in records:
                     row_columns = [

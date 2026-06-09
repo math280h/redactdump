@@ -15,6 +15,7 @@ dependencies = [
     "SQLAlchemy[asyncio]>=2.0.50",
     "psycopg[binary]>=3.3",
     "aiomysql>=0.3.2",
+    "aioodbc>=0.5.0",
     "aiofiles>=25.1",
     "faker>=40.0",
 ]
