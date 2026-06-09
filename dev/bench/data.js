@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781033966918,
+  "lastUpdate": 1781034072743,
   "repoUrl": "https://github.com/math280h/redactdump",
   "entries": {
     "redactdump": [
@@ -270,6 +270,36 @@ window.BENCHMARK_DATA = {
             "value": 3870.39,
             "unit": "rows/sec",
             "extra": "rows=50000 tables=4 iterations=5 median=12.919s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "1547127+math280h@users.noreply.github.com",
+            "name": "Mathias V. Nielsen",
+            "username": "math280h"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "97f0e5f2ce93b1bcc506a88e93671493f82dda43",
+          "message": "fix: pg ddl sequences (#66)",
+          "timestamp": "2026-06-09T15:39:34-04:00",
+          "tree_id": "e7fbc4e20757c947f3dbb30f82dfcc4bb894954a",
+          "url": "https://github.com/math280h/redactdump/commit/97f0e5f2ce93b1bcc506a88e93671493f82dda43"
+        },
+        "date": 1781034071636,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PostgreSQL dump throughput",
+            "value": 4500.43,
+            "unit": "rows/sec",
+            "extra": "rows=50000 tables=4 iterations=5 median=11.110s"
           }
         ]
       }
