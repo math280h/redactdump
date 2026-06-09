@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 from sqlalchemy import table as sql_table
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from redactdump.core.errors import RedactDumpError
 from redactdump.core.models import Table, TableColumn
 from redactdump.core.redactor import Redactor
 
@@ -147,7 +148,10 @@ class Database:
             driver = self.config["connection"].get("driver") or MSSQL_DEFAULT_DRIVER
             query = f"?driver={quote_plus(driver)}&TrustServerCertificate=yes"
         else:
-            raise Exception("Unsupported database engine")
+            raise RedactDumpError(
+                f"Unsupported database engine '{self.config['connection']['type']}'. "
+                "Supported types: pgsql, postgresql, mysql, mssql."
+            )
 
         self.engine: AsyncEngine = create_async_engine(
             f"{engine}{self.config['connection']['username']}:"

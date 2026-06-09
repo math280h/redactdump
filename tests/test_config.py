@@ -6,9 +6,9 @@ from typing import Any, Dict
 
 import pytest
 import yaml
-from pydantic import ValidationError
 
 from redactdump.core.config import Config
+from redactdump.core.errors import RedactDumpError
 
 
 def base_config() -> Dict[str, Any]:
@@ -83,7 +83,7 @@ def test_invalid_output_type_rejected(tmp_path: Path) -> None:
     """An unknown output type fails validation."""
     data = base_config()
     data["output"]["type"] = "stdout"
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -99,7 +99,7 @@ def test_output_ddl_non_bool_rejected(tmp_path: Path) -> None:
     """A non-boolean ddl flag violates the schema."""
     data = base_config()
     data["output"]["ddl"] = "yes"
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -107,7 +107,7 @@ def test_missing_connection_rejected(tmp_path: Path) -> None:
     """Connection is required."""
     data = base_config()
     del data["connection"]
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -115,7 +115,7 @@ def test_missing_output_rejected(tmp_path: Path) -> None:
     """Output is required."""
     data = base_config()
     del data["output"]
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -123,7 +123,7 @@ def test_missing_redact_rejected(tmp_path: Path) -> None:
     """Redact is required."""
     data = base_config()
     del data["redact"]
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -131,7 +131,7 @@ def test_non_integer_port_rejected(tmp_path: Path) -> None:
     """A string port violates the schema."""
     data = base_config()
     data["connection"]["port"] = "5432"
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -147,7 +147,7 @@ def test_pattern_replacement_non_string_rejected(tmp_path: Path) -> None:
     """A non-string, non-null replacement is rejected."""
     data = base_config()
     data["redact"]["patterns"] = {"data": [{"pattern": "x", "replacement": 5}]}
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -181,7 +181,7 @@ def test_non_string_provider_rejected(tmp_path: Path) -> None:
     """A non-string provider entry violates the schema."""
     data = base_config()
     data["redact"]["providers"] = [123]
-    with pytest.raises(ValidationError):
+    with pytest.raises(RedactDumpError):
         load(tmp_path, data)
 
 
@@ -192,3 +192,28 @@ def test_load_does_not_mutate_unrelated_keys(tmp_path: Path) -> None:
     expected = copy.deepcopy(data["performance"])
     result = load(tmp_path, data)
     assert result["performance"] == expected
+
+
+def test_missing_config_file_reports_path(tmp_path: Path) -> None:
+    """A missing config file raises a message naming the path."""
+    missing = tmp_path / "nope.yaml"
+    with pytest.raises(RedactDumpError, match="Config file not found"):
+        Config(str(missing)).load_config()
+
+
+def test_invalid_yaml_reports_file(tmp_path: Path) -> None:
+    """A file that is not valid YAML raises a clean message."""
+    path = tmp_path / "config.yaml"
+    path.write_text("connection: [unclosed")
+    with pytest.raises(RedactDumpError, match="not valid YAML"):
+        Config(str(path)).load_config()
+
+
+def test_validation_error_names_failing_key(tmp_path: Path) -> None:
+    """A schema violation reports the dotted key that failed."""
+    data = base_config()
+    data["output"]["type"] = "stdout"
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(RedactDumpError, match=r"output\.type"):
+        Config(str(path)).load_config()
