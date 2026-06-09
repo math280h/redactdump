@@ -1,3 +1,4 @@
+import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from rich.console import Console
@@ -118,6 +119,10 @@ MSSQL_FRACTIONAL_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
 # The default ODBC driver for SQL Server connections; override with
 # connection.driver if a different one is installed.
 MSSQL_DEFAULT_DRIVER = "ODBC Driver 18 for SQL Server"
+
+# A reconstructed PostgreSQL column default that draws from a sequence,
+# e.g. nextval('users_id_seq'::regclass).
+SEQUENCE_DEFAULT_PATTERN = re.compile(r"nextval\('([^']+)'::regclass\)")
 
 
 class Database:
@@ -397,11 +402,49 @@ class Database:
         primary_key = [row.name for row in key_result]
         ddl = self.postgres_ddl(table_name, columns, primary_key)
 
+        sequences = await self.postgres_sequence_statements(conn, columns)
+        if sequences:
+            ddl = "\n".join(sequences) + "\n" + ddl
+
         index_result = await conn.execute(text(POSTGRES_INDEXES_SQL), {"schema": schema, "table": table_name})
         indexes = [row.statement for row in index_result]
         if indexes:
             ddl += "\n" + "\n".join(f"{statement};" for statement in indexes)
         return ddl
+
+    @staticmethod
+    async def postgres_sequence_statements(
+        conn: Any, columns: Sequence[Tuple[str, str, bool, Optional[str]]]
+    ) -> List[str]:
+        """Create and position the sequences referenced by column defaults.
+
+        A reconstructed default such as nextval('users_id_seq'::regclass)
+        refers to a sequence the dump would otherwise never create, so a
+        replay onto an empty database would fail. Each referenced sequence is
+        created ahead of the table and advanced to its current value so
+        inserts after a replay do not collide with the dumped rows.
+
+        Args:
+            conn (AsyncConnection): An open read connection.
+            columns (Sequence): (name, type, not_null, default) per column.
+
+        Returns:
+            List[str]: CREATE SEQUENCE and setval statements, in order.
+        """
+        statements: List[str] = []
+        seen = set()
+        for _name, _data_type, _not_null, default_value in columns:
+            match = SEQUENCE_DEFAULT_PATTERN.search(default_value) if default_value else None
+            if match is None or match.group(1) in seen:
+                continue
+            sequence = match.group(1)
+            seen.add(sequence)
+            result = await conn.execute(text(f"SELECT last_value, is_called FROM {sequence}"))
+            row = list(result)[0]
+            is_called = "true" if row.is_called else "false"
+            statements.append(f"CREATE SEQUENCE IF NOT EXISTS {sequence};")
+            statements.append(f"SELECT setval('{sequence}', {row.last_value}, {is_called});")
+        return statements
 
     async def build_mssql_ddl(self, conn: Any, table_name: str, schema: str) -> str:
         """Reconstruct the CREATE TABLE DDL for a SQL Server table.

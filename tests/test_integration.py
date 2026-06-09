@@ -256,6 +256,43 @@ async def test_ddl_recreates_a_working_table(
             conn.execute(text("INSERT INTO typed (id, name) VALUES (1, 'duplicate')"))
 
 
+@pytest.fixture
+def serial_table(setup_engine: Engine) -> Iterator[None]:
+    """Create a table with a SERIAL primary key, then drop it and its sequence."""
+    if CONNECTION_TYPES[INTEGRATION_DB] != "pgsql":
+        pytest.skip("SERIAL sequences are PostgreSQL specific")
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS serial_t"))
+        conn.execute(text("CREATE TABLE serial_t (id SERIAL PRIMARY KEY, label VARCHAR(20))"))
+        conn.execute(text("INSERT INTO serial_t (label) VALUES ('a'), ('b'), ('c')"))
+    yield
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS serial_t"))
+        conn.execute(text("DROP SEQUENCE IF EXISTS serial_t_id_seq"))
+
+
+async def test_pg_ddl_recreates_and_positions_sequences(
+    serial_table: None, make_database: Callable[..., Database], setup_engine: Engine
+) -> None:
+    """The DDL creates the sequence and advances it past the dumped rows."""
+    database = make_database(ddl=True)
+    ddl = (await find_table(database, "serial_t")).ddl
+    assert ddl is not None
+    assert "CREATE SEQUENCE IF NOT EXISTS" in ddl
+    assert "setval" in ddl
+
+    # Replay onto an empty database; the default must keep working and
+    # continue past the values handed out before the dump.
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP TABLE serial_t"))
+        for statement in (chunk.strip() for chunk in ddl.split(";")):
+            if statement:
+                conn.execute(text(statement))
+        conn.execute(text("INSERT INTO serial_t (label) VALUES ('d')"))
+        new_id = conn.execute(text("SELECT max(id) FROM serial_t")).scalar()
+    assert new_id == 4
+
+
 async def test_dump_ddl_and_data_round_trip(
     make_database: Callable[..., Database], setup_engine: Engine, tmp_path: Path
 ) -> None:

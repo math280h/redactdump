@@ -387,6 +387,83 @@ async def test_get_tables_attaches_postgres_ddl() -> None:
     )
 
 
+async def test_postgres_ddl_creates_referenced_sequences() -> None:
+    """A nextval default makes the DDL create and position its sequence."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "integer")]},
+        ddl_columns={
+            "users": [
+                {
+                    "name": "id",
+                    "data_type": "integer",
+                    "not_null": True,
+                    "default_value": "nextval('users_id_seq'::regclass)",
+                }
+            ]
+        },
+        primary_keys={"users": ["id"]},
+        sequences={"users_id_seq": {"last_value": 41, "is_called": True}},
+    )
+    database = build_database(ddl_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl is not None
+    assert tables[0].ddl.startswith(
+        "CREATE SEQUENCE IF NOT EXISTS users_id_seq;\nSELECT setval('users_id_seq', 41, true);\nCREATE TABLE"
+    )
+    assert "DEFAULT nextval('users_id_seq'::regclass)" in tables[0].ddl
+
+
+async def test_postgres_ddl_sequence_emitted_once_for_repeated_defaults() -> None:
+    """Two columns drawing from the same sequence create it only once."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "integer")]},
+        ddl_columns={
+            "users": [
+                {
+                    "name": "id",
+                    "data_type": "integer",
+                    "not_null": True,
+                    "default_value": "nextval('shared_seq'::regclass)",
+                },
+                {
+                    "name": "alt_id",
+                    "data_type": "integer",
+                    "not_null": False,
+                    "default_value": "nextval('shared_seq'::regclass)",
+                },
+            ]
+        },
+        primary_keys={"users": ["id"]},
+        sequences={"shared_seq": {"last_value": 5, "is_called": True}},
+    )
+    database = build_database(ddl_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl is not None
+    assert tables[0].ddl.count("CREATE SEQUENCE IF NOT EXISTS shared_seq;") == 1
+
+
+async def test_postgres_ddl_fresh_sequence_keeps_is_called_false() -> None:
+    """A never-used sequence is positioned without consuming its first value."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "integer")]},
+        ddl_columns={
+            "users": [
+                {
+                    "name": "id",
+                    "data_type": "integer",
+                    "not_null": True,
+                    "default_value": "nextval('users_id_seq'::regclass)",
+                }
+            ]
+        },
+        primary_keys={"users": ["id"]},
+    )
+    database = build_database(ddl_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl is not None
+    assert "SELECT setval('users_id_seq', 1, false);" in tables[0].ddl
+
+
 async def test_get_tables_uses_show_create_table_on_mysql() -> None:
     """get_tables uses the authoritative SHOW CREATE TABLE output on MySQL."""
     create = "CREATE TABLE `users` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB"
