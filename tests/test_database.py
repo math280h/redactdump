@@ -244,6 +244,33 @@ async def test_get_data_returns_empty_when_select_columns_not_subset() -> None:
     assert engine.executed == []
 
 
+async def test_get_data_warns_about_missing_select_columns(capturing_console: CapturingConsole) -> None:
+    """A select_columns mismatch is reported loudly with the missing names."""
+    engine = FakeEngine(data={"users": [{"id": 1}]})
+    database = build_database(
+        make_config(select_columns=["id", "ghost", "missing"]), engine, console=capturing_console.console
+    )
+
+    await database.get_data(passthrough_table(), 0, 100)
+
+    text = capturing_console.text
+    assert "WARNING" in text
+    assert "users" in text
+    assert "ghost" in text and "missing" in text
+    assert "id" not in text.split("select_columns not found in table:")[1]
+
+
+async def test_get_data_warns_once_per_table_across_batches(capturing_console: CapturingConsole) -> None:
+    """The mismatch warning is printed once even when batches repeat."""
+    engine = FakeEngine(data={"users": [{"id": 1}]})
+    database = build_database(make_config(select_columns=["missing"]), engine, console=capturing_console.console)
+
+    await database.get_data(passthrough_table(), 0, 100)
+    await database.get_data(passthrough_table(), 100, 100)
+
+    assert capturing_console.text.count("WARNING") == 1
+
+
 async def test_get_data_select_star_without_select_columns() -> None:
     """When no columns are selected the query uses SELECT *."""
     engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]})

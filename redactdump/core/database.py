@@ -1,6 +1,6 @@
 import re
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 from sqlalchemy import select, text
@@ -141,6 +141,7 @@ class Database:
         self.console = console
 
         self.redactor = Redactor(config)
+        self.warned_tables: Set[str] = set()
 
         query: Dict[str, str] = {}
         if self.config["connection"]["type"] == "postgresql" or self.config["connection"]["type"] == "pgsql":
@@ -624,7 +625,17 @@ class Database:
     async def _get_data(self, conn: Any, table: Table, offset: int, limit: int) -> list[list[TableColumn]]:
         """Read one ordered batch of rows on an open connection."""
         data = []
-        if not set(self.config["limits"]["select_columns"]).issubset([column.name for column in table.columns]):
+        missing = set(self.config["limits"]["select_columns"]) - {column.name for column in table.columns}
+        if missing:
+            # A global select_columns list rarely fits every table; say
+            # loudly which columns are absent instead of silently writing
+            # an empty dump for the table.
+            if table.name not in self.warned_tables:
+                self.warned_tables.add(table.name)
+                self.console.print(
+                    f"[yellow]WARNING: No data dumped for table '{table.name}': "
+                    f"select_columns not found in table: {', '.join(sorted(missing))}[/yellow]"
+                )
             return []
 
         select_value = (
