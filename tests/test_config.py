@@ -270,6 +270,30 @@ def test_non_bool_consistent_rejected(tmp_path: Path) -> None:
         load(tmp_path, data)
 
 
+def test_unique_and_preserve_null_flags_accepted(tmp_path: Path) -> None:
+    """The unique and preserve_null flags validate on pattern and named column rules."""
+    data = base_config()
+    data["redact"]["patterns"] = {
+        "column": [{"pattern": "^email$", "replacement": "email", "unique": True, "preserve_null": True}]
+    }
+    data["redact"]["columns"] = {
+        "users": [{"name": "email", "replacement": "email", "unique": True, "preserve_null": True}]
+    }
+    result = load(tmp_path, data)
+    assert result["redact"]["patterns"]["column"][0]["unique"] is True
+    assert result["redact"]["patterns"]["column"][0]["preserve_null"] is True
+    assert result["redact"]["columns"]["users"][0]["unique"] is True
+    assert result["redact"]["columns"]["users"][0]["preserve_null"] is True
+
+
+def test_non_bool_unique_rejected(tmp_path: Path) -> None:
+    """A non-boolean unique flag violates the schema."""
+    data = base_config()
+    data["redact"]["patterns"] = {"column": [{"pattern": "^email$", "replacement": "email", "unique": "yes"}]}
+    with pytest.raises(RedactDumpError):
+        load(tmp_path, data)
+
+
 def test_redact_seed_accepted(tmp_path: Path) -> None:
     """The redact.seed key validates and is preserved."""
     data = base_config()

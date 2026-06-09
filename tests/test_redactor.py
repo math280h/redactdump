@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from redactdump.core.errors import RedactDumpError
 from redactdump.core.models import TableColumn
 from redactdump.core.redactor import Redactor
 
@@ -407,3 +408,102 @@ def test_consistent_null_replacement_still_null() -> None:
     """A null replacement stays NULL regardless of the consistent flag."""
     red = redactor({"column": [{"pattern": "^email$", "replacement": None, "consistent": True}]})
     assert redact_email(red, "a@x.com") == "NULL"
+
+
+def test_unique_rule_never_repeats_values() -> None:
+    """A unique rule covers the provider's whole value space without repeats."""
+    red = redactor(
+        {
+            "column": [
+                {"pattern": "^code$", "replacement": "random_int", "arguments": {"min": 0, "max": 4}, "unique": True}
+            ]
+        }
+    )
+    values = [red.redact({"code": i}, columns(("code", None)))[0].value for i in range(5)]
+    assert sorted(values) == [0, 1, 2, 3, 4]
+
+
+def test_unique_rule_exhaustion_reports_clean_error() -> None:
+    """Running out of unique values raises a user-facing error naming the provider."""
+    red = redactor(
+        {
+            "column": [
+                {"pattern": "^code$", "replacement": "random_int", "arguments": {"min": 0, "max": 0}, "unique": True}
+            ]
+        }
+    )
+    red.redact({"code": 1}, columns(("code", None)))
+    with pytest.raises(RedactDumpError, match="random_int"):
+        red.redact({"code": 2}, columns(("code", None)))
+
+
+def test_unique_and_consistent_rejected() -> None:
+    """A rule cannot demand both unique and consistent outputs."""
+    with pytest.raises(SystemExit):
+        redactor({"column": [{"pattern": "^email$", "replacement": "email", "unique": True, "consistent": True}]})
+
+
+def test_named_column_unique_and_consistent_rejected() -> None:
+    """The unique/consistent conflict is also rejected on redact.columns entries."""
+    with pytest.raises(SystemExit):
+        table_redactor({"users": [{"name": "email", "replacement": "email", "unique": True, "consistent": True}]})
+
+
+def test_named_column_unique_flag() -> None:
+    """The unique flag works on redact.columns entries."""
+    red = table_redactor({"users": [{"name": "active", "replacement": "boolean", "unique": True}]})
+    first = red.redact({"active": True}, columns(("active", None)), "users")[0].value
+    second = red.redact({"active": False}, columns(("active", None)), "users")[0].value
+    assert {first, second} == {True, False}
+
+
+def test_preserve_null_keeps_null_cell() -> None:
+    """A preserve_null rule leaves a NULL cell NULL."""
+    red = redactor({"column": [{"pattern": "^email$", "replacement": "email", "preserve_null": True}]})
+    assert redact_email(red, None) is None
+
+
+def test_preserve_null_still_redacts_values() -> None:
+    """A preserve_null rule still replaces non-NULL cells."""
+    red = redactor({"column": [{"pattern": "^email$", "replacement": "email", "preserve_null": True}]})
+    assert redact_email(red, "a@x.com") != "a@x.com"
+
+
+def test_without_preserve_null_null_cells_are_fabricated() -> None:
+    """Without the flag a matching rule fabricates a value for NULL cells."""
+    red = redactor({"column": [{"pattern": "^email$", "replacement": "email"}]})
+    assert redact_email(red, None) is not None
+
+
+def test_preserve_null_claims_column_from_later_rules() -> None:
+    """A preserved NULL column is not fabricated by a later matching rule."""
+    red = redactor(
+        {
+            "column": [
+                {"pattern": "^email$", "replacement": "email", "preserve_null": True},
+                {"pattern": "email", "replacement": "name"},
+            ]
+        }
+    )
+    assert redact_email(red, None) is None
+
+
+def test_preserve_null_data_rule_claims_column() -> None:
+    """preserve_null works on data rules and claims the column for later rules."""
+    red = redactor(
+        {
+            "data": [
+                {"pattern": ".*", "replacement": "name", "preserve_null": True},
+                {"pattern": ".*", "replacement": "name"},
+            ]
+        }
+    )
+    result = red.redact({"note": None}, columns(("note", None)))
+    assert result[0].value is None
+
+
+def test_named_column_preserve_null() -> None:
+    """preserve_null works on redact.columns entries."""
+    red = table_redactor({"users": [{"name": "email", "replacement": "email", "preserve_null": True}]})
+    result = red.redact({"email": None}, columns(("email", None)), "users")
+    assert result[0].value is None
