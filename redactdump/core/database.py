@@ -527,8 +527,12 @@ class Database:
                         TableColumn(column.name, column.data_type, column.is_nullable, column.default)
                         for column in table.columns
                     ]
-                    if self.redactor.data_rules or self.redactor.column_rules:
-                        modified_column = self.redactor.redact(item, row_columns)
+                    if (
+                        self.redactor.data_rules
+                        or self.redactor.column_rules
+                        or self.redactor.table_rules.get(table.name)
+                    ):
+                        modified_column = self.redactor.redact(item, row_columns, table.name)
                     else:
                         for key, value in item.items():
                             column = next((x for x in row_columns if x.name == key), None)

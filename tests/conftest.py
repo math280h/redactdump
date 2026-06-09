@@ -161,6 +161,7 @@ def make_config(
     *,
     select_columns: Optional[List[str]] = None,
     patterns: Optional[Dict[str, Any]] = None,
+    columns: Optional[Dict[str, Any]] = None,
     debug: bool = False,
     connection_type: str = "pgsql",
     limits: Optional[Dict[str, Any]] = None,
@@ -171,6 +172,9 @@ def make_config(
     resolved_limits = {"select_columns": select_columns or []}
     if limits:
         resolved_limits.update(limits)
+    redact: Dict[str, Any] = {"patterns": patterns if patterns is not None else {"data": []}}
+    if columns is not None:
+        redact["columns"] = columns
     return {
         "connection": {
             "type": connection_type,
@@ -183,7 +187,7 @@ def make_config(
         "limits": resolved_limits,
         "performance": performance or {},
         "debug": {"enabled": debug},
-        "redact": {"patterns": patterns if patterns is not None else {"data": []}},
+        "redact": redact,
         "output": output or {"type": "file", "location": "out"},
     }
 

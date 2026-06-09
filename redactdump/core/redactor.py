@@ -32,6 +32,7 @@ class Redactor:
 
         self.data_rules: List[CustomRule] = []
         self.column_rules: List[CustomRule] = []
+        self.table_rules: Dict[str, List[CustomRule]] = {}
         self.load_providers()
         self.load_rules()
 
@@ -83,14 +84,22 @@ class Redactor:
                 resolved[key] = value
         return resolved
 
+    def validate_replacement(self, replacement: Optional[str]) -> None:
+        """Abort with a message when a replacement is not a usable faker provider.
+
+        Args:
+            replacement (Optional[str]): The configured replacement name.
+        """
+        if replacement is not None and not callable(getattr(self.fake, replacement, None)):
+            sys.exit(f"{replacement} is not a valid replacement.")
+
     def load_rules(self) -> None:
-        """Load redaction rules from the optional column and data pattern groups."""
+        """Load redaction rules from the pattern groups and named table columns."""
         patterns = self.config["redact"].get("patterns", {})
         for category in patterns:
             for pattern in patterns[category]:
                 replacement = pattern["replacement"]
-                if replacement is not None and not callable(getattr(self.fake, replacement, None)):
-                    sys.exit(f"{replacement} is not a valid replacement.")
+                self.validate_replacement(replacement)
 
                 arguments = self.resolve_arguments(pattern.get("arguments") or {})
                 rule = CustomRule(replacement, re.compile(pattern["pattern"]), arguments)
@@ -98,6 +107,14 @@ class Redactor:
                     self.data_rules.append(rule)
                 elif category == "column":
                     self.column_rules.append(rule)
+
+        columns = self.config["redact"].get("columns") or {}
+        for table_name, named_columns in columns.items():
+            for named in named_columns:
+                replacement = named["replacement"]
+                self.validate_replacement(replacement)
+                rule = CustomRule(replacement, re.compile(f"^{re.escape(named['name'])}$"))
+                self.table_rules.setdefault(table_name, []).append(rule)
 
     def get_replacement(
         self, replacement: Optional[str], arguments: Optional[Dict[str, Any]] = None
@@ -114,12 +131,14 @@ class Redactor:
             return value
         return "NULL"
 
-    def redact(self, data: dict, columns: List[TableColumn]) -> list[TableColumn]:
+    def redact(self, data: dict, columns: List[TableColumn], table_name: Optional[str] = None) -> list[TableColumn]:
         """Redact data.
 
         Args:
             data (dict): Data to redact.
             columns (list): Rows to redact.
+            table_name (Optional[str]): Table the row belongs to, used for
+                the named column rules configured under redact.columns.
 
         Returns:
             dict: Redacted data.
@@ -132,7 +151,8 @@ class Redactor:
             if column is not None:
                 column.value = value
 
-        for rule in self.column_rules:
+        named_rules = self.table_rules.get(table_name, []) if table_name else []
+        for rule in named_rules + self.column_rules:
             for column in [
                 column for column in columns if rule.pattern.search(column.name) and column.name not in columns_redacted
             ]:
