@@ -52,6 +52,12 @@ def test_invalid_replacement_exits() -> None:
         redactor({"data": [{"pattern": "x", "replacement": "definitely_not_a_provider"}]})
 
 
+def test_non_callable_attribute_rejected() -> None:
+    """A faker attribute that exists but is not callable is not a valid replacement."""
+    with pytest.raises(SystemExit):
+        redactor({"data": [{"pattern": "x", "replacement": "locales"}]})
+
+
 def community_redactor(providers: List[str], patterns: Dict[str, Any]) -> Redactor:
     """Build a Redactor that also registers community providers."""
     return Redactor({"redact": {"providers": providers, "patterns": patterns}})
@@ -124,6 +130,44 @@ def test_get_replacement_uses_faker_provider() -> None:
     """A named provider produces a generated value."""
     red = redactor({"data": []})
     assert isinstance(red.get_replacement("name"), str)
+
+
+def test_rule_without_arguments_defaults_to_empty() -> None:
+    """A rule with no arguments key carries an empty arguments mapping."""
+    red = redactor({"data": [{"pattern": "x", "replacement": "name"}]})
+    assert red.data_rules[0].arguments == {}
+
+
+def test_arguments_passed_to_provider_as_kwargs() -> None:
+    """Rule arguments are forwarded as keyword arguments to the provider."""
+    red = redactor({"data": [{"pattern": "x", "replacement": "random_int", "arguments": {"min": 7, "max": 7}}]})
+    assert red.get_replacement("random_int", red.data_rules[0].arguments) == 7
+
+
+def test_arguments_applied_during_redaction() -> None:
+    """A column rule with arguments uses them when generating the value."""
+    red = redactor({"column": [{"pattern": "^age$", "replacement": "random_int", "arguments": {"min": 42, "max": 42}}]})
+    result = red.redact({"age": 5}, columns(("age", None)))
+    assert result[0].value == 42
+
+
+def test_enum_argument_resolved_via_import_directive() -> None:
+    """An {import: path} argument is resolved to a class so enum can be used."""
+    from http import HTTPStatus
+
+    red = redactor(
+        {"data": [{"pattern": "x", "replacement": "enum", "arguments": {"enum_cls": {"import": "http.HTTPStatus"}}}]}
+    )
+    assert red.data_rules[0].arguments == {"enum_cls": HTTPStatus}
+    assert isinstance(red.get_replacement("enum", red.data_rules[0].arguments), HTTPStatus)
+
+
+def test_invalid_argument_import_path_exits() -> None:
+    """An argument import path that cannot be loaded aborts rule loading."""
+    with pytest.raises(SystemExit):
+        redactor(
+            {"data": [{"pattern": "x", "replacement": "enum", "arguments": {"enum_cls": {"import": "nope.NotReal"}}}]}
+        )
 
 
 def test_column_rule_replaces_matching_column() -> None:

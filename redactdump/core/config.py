@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict
@@ -52,6 +52,7 @@ class PatternRule(StrictModel):
 
     pattern: str
     replacement: Optional[str]
+    arguments: Optional[Dict[str, Any]] = None
 
 
 class PatternsConfig(StrictModel):

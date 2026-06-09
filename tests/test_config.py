@@ -143,6 +143,16 @@ def test_named_columns_section_accepted(tmp_path: Path) -> None:
     assert result["redact"]["columns"]["users"][0]["name"] == "email"
 
 
+def test_pattern_arguments_accepted(tmp_path: Path) -> None:
+    """A pattern rule may carry an arguments mapping for the provider."""
+    data = base_config()
+    data["redact"]["patterns"] = {
+        "data": [{"pattern": "x", "replacement": "random_int", "arguments": {"min": 1, "max": 9}}]
+    }
+    result = load(tmp_path, data)
+    assert result["redact"]["patterns"]["data"][0]["arguments"] == {"min": 1, "max": 9}
+
+
 def test_providers_section_accepted(tmp_path: Path) -> None:
     """The redact.providers list validates against the schema."""
     data = base_config()
