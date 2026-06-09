@@ -317,7 +317,7 @@ def seeded_redactor(seed: str, patterns: Dict[str, Any]) -> Redactor:
     return Redactor({"redact": {"seed": seed, "patterns": patterns}})
 
 
-def redact_email(red: Redactor, value: str) -> Any:
+def redact_email(red: Redactor, value: Optional[str]) -> Any:
     """Run a single email cell through the redactor and return the output."""
     return red.redact({"email": value}, columns(("email", None)))[0].value
 
