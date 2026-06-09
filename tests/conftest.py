@@ -84,6 +84,7 @@ class FakeEngine:
         ddl_indexes: Optional[Dict[str, List[str]]] = None,
         foreign_keys: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         index_rows: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        sequences: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
         self.schema = schema or {}
         self.data = data or {}
@@ -94,6 +95,7 @@ class FakeEngine:
         self.ddl_indexes = ddl_indexes or {}
         self.foreign_keys = foreign_keys or {}
         self.index_rows = index_rows or {}
+        self.sequences = sequences or {}
         self.executed: List[Any] = []
         self.execution_options_calls: List[Dict[str, Any]] = []
         self.dialect = SimpleNamespace(name=dialect_name)
@@ -142,6 +144,11 @@ class FakeEngine:
         if "pg_catalog.pg_index" in sql:
             table_name = (params or {}).get("table", "")
             return [FakeRow({"name": name}) for name in self.primary_keys.get(table_name, [])]
+        if "last_value" in sql:
+            match = re.search(r"FROM (\S+)$", sql)
+            name = match.group(1) if match else ""
+            row = self.sequences.get(name, {"last_value": 1, "is_called": False})
+            return [FakeRow(row)]
         if "COUNT(*)" in sql:
             table = self._table_from_sql(sql)
             value = self.counts.get(table, 0)
