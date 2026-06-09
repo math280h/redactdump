@@ -325,6 +325,12 @@ by `--max-workers`) using async database drivers (`psycopg` for PostgreSQL,
 `aiomysql` for MySQL, `aioodbc` for SQL Server) and async file writes via
 `aiofiles`.
 
+Each table is read over a single connection holding one transaction
+(REPEATABLE READ on PostgreSQL and MySQL), and batches are ordered by the
+table's primary key (or every column when there is none), so a dump taken
+while the database is being written to neither skips nor duplicates rows
+within a table.
+
 ### Benchmark
 
 `benchmarks/benchmark_dump.py` seeds a live PostgreSQL database, runs the full

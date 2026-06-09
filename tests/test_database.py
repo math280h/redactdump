@@ -273,11 +273,32 @@ async def test_get_data_applies_offset_and_limit() -> None:
     statement = engine.executed[-1][2]
     assert statement._offset == 25
     assert statement._limit == 50
-    assert statement._order_by_clauses == ()
 
 
-async def test_get_data_mssql_orders_by_select_null() -> None:
-    """On SQL Server the query gains the ORDER BY that OFFSET/FETCH requires."""
+async def test_get_data_orders_by_primary_key() -> None:
+    """Batched reads are ordered by the table's primary key."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]})
+    database = build_database(make_config(), engine)
+    table = passthrough_table()
+    table.primary_key = ["id"]
+    await database.get_data(table, 0, 100)
+
+    statement = engine.executed[-1][2]
+    assert [str(clause) for clause in statement._order_by_clauses] == ['"id"']
+
+
+async def test_get_data_orders_by_all_columns_without_primary_key() -> None:
+    """Without a primary key every selected column is ordered for stability."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]})
+    database = build_database(make_config(), engine)
+    await database.get_data(passthrough_table(), 0, 100)
+
+    statement = engine.executed[-1][2]
+    assert [str(clause) for clause in statement._order_by_clauses] == ['"id", "email"']
+
+
+async def test_get_data_mssql_uses_dialect_quoting_in_order_by() -> None:
+    """On SQL Server the ORDER BY columns are bracket-quoted."""
     engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]}, dialect_name="mssql")
     database = build_database(make_config(connection_type="mssql"), engine)
     await database.get_data(passthrough_table(), 25, 50)
@@ -285,7 +306,94 @@ async def test_get_data_mssql_orders_by_select_null() -> None:
     statement = engine.executed[-1][2]
     assert statement._offset == 25
     assert statement._limit == 50
+    assert [str(clause) for clause in statement._order_by_clauses] == ["[id], [email]"]
+
+
+async def test_get_data_mysql_uses_backtick_quoting_in_order_by() -> None:
+    """On MySQL the ORDER BY columns are backtick-quoted."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]}, dialect_name="mysql")
+    database = build_database(make_config(connection_type="mysql"), engine)
+    await database.get_data(passthrough_table(), 0, 100)
+
+    statement = engine.executed[-1][2]
+    assert [str(clause) for clause in statement._order_by_clauses] == ["`id`, `email`"]
+
+
+async def test_get_data_mssql_falls_back_to_select_null_order() -> None:
+    """A column-less table still satisfies the SQL Server OFFSET requirement."""
+    engine = FakeEngine(data={"users": [{"id": 1}]}, dialect_name="mssql")
+    database = build_database(make_config(connection_type="mssql"), engine)
+    await database.get_data(Table("users", []), 25, 50)
+
+    statement = engine.executed[-1][2]
     assert [str(clause) for clause in statement._order_by_clauses] == ["(SELECT NULL)"]
+
+
+async def test_get_data_column_less_table_has_no_order_on_postgres() -> None:
+    """Without columns to order by, non-mssql dialects emit no ORDER BY."""
+    engine = FakeEngine(data={"users": [{"id": 1}]})
+    database = build_database(make_config(), engine)
+    await database.get_data(Table("users", []), 0, 100)
+
+    statement = engine.executed[-1][2]
+    assert statement._order_by_clauses == ()
+
+
+async def test_table_connection_reuses_a_single_connection() -> None:
+    """All reads through a table connection share one connection."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]}, counts={"users": 1})
+    database = build_database(make_config(), engine)
+
+    async with database.table_connection() as conn:
+        assert await database.count_rows(passthrough_table(), conn=conn) == 1
+        await database.get_data(passthrough_table(), 0, 100, conn=conn)
+    assert engine.connect_calls == 1
+
+
+async def test_table_connection_requests_repeatable_read() -> None:
+    """The per-table transaction asks for REPEATABLE READ isolation."""
+    engine = FakeEngine(data={"users": [{"id": 1}]})
+    database = build_database(make_config(), engine)
+
+    async with database.table_connection():
+        pass
+    assert any(options.get("isolation_level") == "REPEATABLE READ" for options in engine.execution_options_calls)
+
+
+async def test_table_connection_skips_isolation_override_on_mssql() -> None:
+    """SQL Server keeps its default isolation level."""
+    engine = FakeEngine(data={"users": [{"id": 1}]}, dialect_name="mssql")
+    database = build_database(make_config(connection_type="mssql"), engine)
+
+    async with database.table_connection():
+        pass
+    assert not any("isolation_level" in options for options in engine.execution_options_calls)
+
+
+async def test_get_tables_populates_primary_key_on_postgres() -> None:
+    """get_tables records the primary key columns for ordering."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]}, primary_keys={"users": ["id"]})
+    database = build_database(make_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].primary_key == ["id"]
+
+
+async def test_get_tables_populates_primary_key_on_mysql() -> None:
+    """The MySQL path reads the primary key from information_schema."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "int")]}, dialect_name="mysql", primary_keys={"users": ["id"]}
+    )
+    database = build_database(make_config(connection_type="mysql"), engine)
+    tables = await database.get_tables()
+    assert tables[0].primary_key == ["id"]
+
+
+async def test_get_tables_empty_primary_key_without_one() -> None:
+    """A table without a primary key carries an empty key list."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "integer")]})
+    database = build_database(make_config(), engine)
+    tables = await database.get_tables()
+    assert tables[0].primary_key == []
 
 
 async def test_get_data_emits_debug_sql(capturing_console: CapturingConsole) -> None:
@@ -488,7 +596,10 @@ async def test_get_tables_skips_ddl_when_disabled() -> None:
     tables = await database.get_tables()
     assert tables[0].ddl is None
     assert tables[0].foreign_keys == []
-    assert not any("SHOW CREATE TABLE" in sql or "pg_catalog" in sql for (sql, _p, _s) in engine.executed)
+    assert not any(
+        "SHOW CREATE TABLE" in sql or "format_type" in sql or "pg_get_indexdef" in sql
+        for (sql, _p, _s) in engine.executed
+    )
 
 
 async def test_get_tables_postgres_ddl_appends_indexes() -> None:

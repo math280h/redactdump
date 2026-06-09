@@ -1,5 +1,6 @@
 import re
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Tuple
 
 from rich.console import Console
 from sqlalchemy import select, text
@@ -175,6 +176,23 @@ class Database:
         """Dispose of the engine and its connection pool."""
         await self.engine.dispose()
 
+    @asynccontextmanager
+    async def table_connection(self) -> AsyncIterator[Any]:
+        """Yield a connection holding a single read transaction.
+
+        Holding one transaction for all of a table's batches gives them the
+        same snapshot on PostgreSQL and MySQL (REPEATABLE READ), so writes
+        happening during the dump cannot skip or duplicate rows between
+        batches.
+        """
+        async with self.engine.connect() as conn:
+            options: Dict[str, Any] = {"postgresql_readonly": True, "postgresql_deferrable": True}
+            if self.engine.dialect.name in ("postgresql", "mysql"):
+                options["isolation_level"] = "REPEATABLE READ"
+            conn = await conn.execution_options(**options)
+            async with conn.begin():
+                yield conn
+
     async def get_tables(self) -> List[Table]:
         """Get a list of tables.
 
@@ -224,11 +242,34 @@ class Database:
                             )
 
                     table_obj = Table(table[0], table_columns)
+                    table_obj.primary_key = await self.get_primary_key(conn, table[0], schema)
                     if self.config["output"].get("ddl"):
                         table_obj.ddl = await self.build_ddl(conn, table[0], schema)
                         table_obj.foreign_keys = await self.build_foreign_keys(conn, table[0], schema)
                     tables.append(table_obj)
         return tables
+
+    async def get_primary_key(self, conn: Any, table_name: str, schema: str) -> List[str]:
+        """Return the table's primary key column names, in key order.
+
+        The primary key drives the ORDER BY used for batched reads, so the
+        row order is deterministic across OFFSET/LIMIT queries.
+
+        Args:
+            conn (AsyncConnection): An open read connection.
+            table_name (str): Name of the table.
+            schema (str): Schema the table lives in.
+
+        Returns:
+            List[str]: The primary key columns, empty when there is none.
+        """
+        if self.engine.dialect.name == "postgresql":
+            sql = POSTGRES_PRIMARY_KEY_SQL
+        else:
+            # Standard information_schema, valid for both MySQL and SQL Server.
+            sql = MSSQL_PRIMARY_KEY_SQL
+        result = await conn.execute(text(sql), {"schema": schema, "table": table_name})
+        return [row.name for row in result]
 
     @staticmethod
     def assemble_ddl(
@@ -515,79 +556,109 @@ class Database:
         result = await conn.execute(text(POSTGRES_FOREIGN_KEYS_SQL), {"schema": schema, "table": table_name})
         return [f'ALTER TABLE "{table_name}" ADD CONSTRAINT "{row.name}" {row.definition};' for row in result]
 
-    async def count_rows(self, table: Table) -> int:
+    async def count_rows(self, table: Table, conn: Optional[Any] = None) -> int:
         """Get the number of rows in a table.
 
         Args:
             table (Table): The table name.
+            conn (Optional[AsyncConnection]): An open connection to reuse;
+                when omitted a short-lived one is opened.
 
         Returns:
             int: The number of rows in the table.
         """
-        async with self.engine.connect() as conn:
-            conn = await conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
-            async with conn.begin():
-                result = await conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name)))
+        if conn is not None:
+            return await self._count_rows(conn, table)
+        async with self.table_connection() as fresh:
+            return await self._count_rows(fresh, table)
 
-                for item in result:
-                    return item[0]
+    @staticmethod
+    async def _count_rows(conn: Any, table: Table) -> int:
+        """Run the COUNT(*) query on an open connection."""
+        result = await conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name)))
+        for item in result:
+            return item[0]
         return 0
 
-    async def get_data(self, table: Table, offset: int, limit: int) -> list[list[TableColumn]]:
+    def order_clause(self, table: Table) -> Optional[str]:
+        """Render a deterministic ORDER BY column list for batched reads.
+
+        OFFSET/LIMIT row order is not guaranteed by any engine without an
+        ORDER BY, so batches could otherwise skip or duplicate rows. The
+        primary key is used when the table has one; otherwise every selected
+        column is ordered.
+
+        Args:
+            table (Table): The table being read.
+
+        Returns:
+            Optional[str]: The quoted column list, or None without columns.
+        """
+        names = table.primary_key or [column.name for column in table.columns]
+        if not names:
+            return None
+        template = {"mysql": "`{}`", "mssql": "[{}]"}.get(self.engine.dialect.name, '"{}"')
+        return ", ".join(template.format(name) for name in names)
+
+    async def get_data(
+        self, table: Table, offset: int, limit: int, conn: Optional[Any] = None
+    ) -> list[list[TableColumn]]:
         """Get data from a table.
 
         Args:
             table (Table): The table name.
             offset (int): The offset.
             limit (int): The limit.
+            conn (Optional[AsyncConnection]): An open connection to reuse so
+                every batch of a table shares one transaction; when omitted a
+                short-lived one is opened.
 
         Returns:
             list: The data.
         """
+        if conn is not None:
+            return await self._get_data(conn, table, offset, limit)
+        async with self.table_connection() as fresh:
+            return await self._get_data(fresh, table, offset, limit)
+
+    async def _get_data(self, conn: Any, table: Table, offset: int, limit: int) -> list[list[TableColumn]]:
+        """Read one ordered batch of rows on an open connection."""
         data = []
-        async with self.engine.connect() as conn:
-            conn = await conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
+        if not set(self.config["limits"]["select_columns"]).issubset([column.name for column in table.columns]):
+            return []
 
-            if not set(self.config["limits"]["select_columns"]).issubset([column.name for column in table.columns]):
-                return []
+        select_value = (
+            "*" if not self.config["limits"]["select_columns"] else ",".join(self.config["limits"]["select_columns"])
+        )
 
-            async with conn.begin():
-                select_value = (
-                    "*"
-                    if not self.config["limits"]["select_columns"]
-                    else ",".join(self.config["limits"]["select_columns"])
-                )
+        if self.config["debug"]["enabled"]:
+            self.console.print(
+                f"[cyan]DEBUG: Running 'SELECT {select_value} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
+            )
 
-                if self.config["debug"]["enabled"]:
-                    self.console.print(
-                        f"[cyan]DEBUG: Running 'SELECT {select_value} FROM "
-                        f"{table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
-                    )
+        query = select(text(select_value)).offset(offset).limit(limit).select_from(sql_table(table.name))
+        order = self.order_clause(table)
+        if order is not None:
+            query = query.order_by(text(order))
+        elif self.engine.dialect.name == "mssql":
+            # SQL Server only supports OFFSET/FETCH after an ORDER BY;
+            # (SELECT NULL) orders by nothing while satisfying that.
+            query = query.order_by(text("(SELECT NULL)"))
 
-                query = select(text(select_value)).offset(offset).limit(limit).select_from(sql_table(table.name))
-                if self.engine.dialect.name == "mssql":
-                    # SQL Server only supports OFFSET/FETCH after an ORDER BY;
-                    # (SELECT NULL) orders by nothing while satisfying that.
-                    query = query.order_by(text("(SELECT NULL)"))
-
-                result = await conn.execute(query)
-                records = [dict(row._mapping) for row in result]
-                for item in records:
-                    row_columns = [
-                        TableColumn(column.name, column.data_type, column.is_nullable, column.default)
-                        for column in table.columns
-                    ]
-                    if (
-                        self.redactor.data_rules
-                        or self.redactor.column_rules
-                        or self.redactor.table_rules.get(table.name)
-                    ):
-                        modified_column = self.redactor.redact(item, row_columns, table.name)
-                    else:
-                        for key, value in item.items():
-                            column = next((x for x in row_columns if x.name == key), None)
-                            if column is not None:
-                                column.value = value
-                        modified_column = row_columns
-                    data.append(modified_column)
+        result = await conn.execute(query)
+        records = [dict(row._mapping) for row in result]
+        for item in records:
+            row_columns = [
+                TableColumn(column.name, column.data_type, column.is_nullable, column.default)
+                for column in table.columns
+            ]
+            if self.redactor.data_rules or self.redactor.column_rules or self.redactor.table_rules.get(table.name):
+                modified_column = self.redactor.redact(item, row_columns, table.name)
+            else:
+                for key, value in item.items():
+                    column = next((x for x in row_columns if x.name == key), None)
+                    if column is not None:
+                        column.value = value
+                modified_column = row_columns
+            data.append(modified_column)
         return data
