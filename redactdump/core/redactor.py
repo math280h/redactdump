@@ -1,8 +1,8 @@
 import importlib
 import re
 import sys
-from dataclasses import dataclass
-from typing import Any, List, Optional, Pattern, Union
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Pattern, Union
 
 from faker import Faker
 
@@ -15,6 +15,7 @@ class CustomRule:
 
     replacement: Optional[str]
     pattern: Pattern
+    arguments: Dict[str, Any] = field(default_factory=dict)
 
 
 class Redactor:
@@ -34,6 +35,24 @@ class Redactor:
         self.load_providers()
         self.load_rules()
 
+    @staticmethod
+    def import_from_path(dotted_path: str, description: str) -> Any:
+        """Import an object from a dotted path, aborting with a message on failure.
+
+        Args:
+            dotted_path (str): A "module.attr" style path.
+            description (str): What the object is, used in the error message.
+        """
+        module_path, _, attr_name = dotted_path.rpartition(".")
+        if not module_path or not attr_name:
+            sys.exit(f"{dotted_path} is not a valid {description} path.")
+
+        try:
+            module = importlib.import_module(module_path)
+            return getattr(module, attr_name)
+        except (ImportError, AttributeError):
+            sys.exit(f"{dotted_path} could not be loaded as a {description}.")
+
     def load_providers(self) -> None:
         """Register faker community providers declared in the config.
 
@@ -43,17 +62,26 @@ class Redactor:
         """
         providers = self.config["redact"].get("providers") or []
         for dotted_path in providers:
-            module_path, _, class_name = dotted_path.rpartition(".")
-            if not module_path or not class_name:
-                sys.exit(f"{dotted_path} is not a valid provider path.")
-
-            try:
-                module = importlib.import_module(module_path)
-                provider = getattr(module, class_name)
-            except (ImportError, AttributeError):
-                sys.exit(f"{dotted_path} could not be loaded as a faker provider.")
-
+            provider = self.import_from_path(dotted_path, "faker provider")
             self.fake.add_provider(provider)
+
+    def resolve_arguments(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve replacement arguments, importing any class-valued ones.
+
+        A value written as {"import": "module.attr"} is replaced with the
+        imported object so providers such as enum can be given a class. Any
+        other value is passed through to the provider unchanged.
+
+        Args:
+            arguments (dict): The raw arguments mapping from the config.
+        """
+        resolved: Dict[str, Any] = {}
+        for key, value in arguments.items():
+            if isinstance(value, dict) and set(value) == {"import"}:
+                resolved[key] = self.import_from_path(value["import"], "replacement argument")
+            else:
+                resolved[key] = value
+        return resolved
 
     def load_rules(self) -> None:
         """Load redaction rules from the optional column and data pattern groups."""
@@ -61,27 +89,28 @@ class Redactor:
         for category in patterns:
             for pattern in patterns[category]:
                 replacement = pattern["replacement"]
-                if replacement is not None:
-                    try:
-                        getattr(self.fake, replacement)
-                    except AttributeError:
-                        sys.exit(f"{replacement} is not a valid replacement.")
+                if replacement is not None and not callable(getattr(self.fake, replacement, None)):
+                    sys.exit(f"{replacement} is not a valid replacement.")
 
-                rule = CustomRule(replacement, re.compile(pattern["pattern"]))
+                arguments = self.resolve_arguments(pattern.get("arguments") or {})
+                rule = CustomRule(replacement, re.compile(pattern["pattern"]), arguments)
                 if category == "data":
                     self.data_rules.append(rule)
                 elif category == "column":
                     self.column_rules.append(rule)
 
-    def get_replacement(self, replacement: Optional[str]) -> Union[str, Any]:
+    def get_replacement(
+        self, replacement: Optional[str], arguments: Optional[Dict[str, Any]] = None
+    ) -> Union[str, Any]:
         """Get replacement value.
 
         Args:
             replacement (str): Replacement.
+            arguments (dict): Keyword arguments passed to the faker provider.
         """
         if replacement is not None:
             func = getattr(self.fake, replacement)
-            value = func()
+            value = func(**(arguments or {}))
             return value
         return "NULL"
 
@@ -107,7 +136,7 @@ class Redactor:
             for column in [
                 column for column in columns if rule.pattern.search(column.name) and column.name not in columns_redacted
             ]:
-                column.value = self.get_replacement(rule.replacement)
+                column.value = self.get_replacement(rule.replacement, rule.arguments)
                 columns_redacted.append(column.name)
 
         for rule in self.data_rules:
@@ -120,7 +149,7 @@ class Redactor:
                     continue
 
                 if rule.pattern.search(str(value)):
-                    discovered_column.value = self.get_replacement(rule.replacement)
+                    discovered_column.value = self.get_replacement(rule.replacement, rule.arguments)
                     columns_redacted.append(discovered_column.name)
 
         return columns

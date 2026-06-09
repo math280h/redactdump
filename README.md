@@ -49,7 +49,62 @@ redactdump uses faker to generate random data.
 `replacement` can therefore be any function from the following providers:
 https://faker.readthedocs.io/en/stable/providers.html
 
-**NOTE: redactdump is currently NOT tested with all providers, some might trigger bugs**
+The standard faker providers are validated in CI: each is exercised through the
+redaction pipeline to confirm it produces a value that is written out as a valid
+SQL literal.
+
+#### Providers that need an optional dependency
+
+These work normally once their package is installed alongside redactdump:
+
+* **`image`** generates raw image bytes and needs
+  [Pillow](https://pypi.org/project/pillow/). After `pip install Pillow`, target
+  a `bytea` column so the bytes are written as a hex literal (on a text column
+  you would get a Python byte-string repr instead):
+
+  ````yaml
+  redact:
+    patterns:
+      column:
+        - pattern: '^avatar$'
+          replacement: image
+  ````
+
+* **`xml`** generates an XML document and needs
+  [xmltodict](https://pypi.org/project/xmltodict/). After `pip install xmltodict`
+  it returns an XML string, suitable for `text` or `character varying` columns.
+
+#### Provider arguments
+
+Some providers take arguments (for example `random_int` accepts `min` and
+`max`). Add an `arguments` mapping to a rule and it is passed to the provider as
+keyword arguments:
+
+````yaml
+redact:
+  patterns:
+    column:
+      - pattern: '^age$'
+        replacement: random_int
+        arguments:
+          min: 18
+          max: 99
+````
+
+An argument written as `{ import: module.attr }` is resolved to the imported
+object before the provider is called. This is what makes `enum` usable, as it
+needs an enum class rather than a plain value:
+
+````yaml
+redact:
+  patterns:
+    column:
+      - pattern: '^status$'
+        replacement: enum
+        arguments:
+          enum_cls:
+            import: myapp.models.Status
+````
 
 #### Community providers
 

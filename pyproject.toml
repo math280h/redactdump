@@ -39,6 +39,7 @@ asyncio_mode = "auto"
 markers = [
     "integration: tests that require a live database (selected with -m integration)",
     "community: tests that require an installed faker community provider (selected with -m community)",
+    "extras: tests for providers needing optional faker dependencies (selected with -m extras)",
 ]
 
 [tool.coverage.run]
