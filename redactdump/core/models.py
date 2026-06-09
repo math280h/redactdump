@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Any, List
+from dataclasses import dataclass, field
+from typing import Any, List, Optional, Union
 
 
 @dataclass
@@ -8,8 +8,8 @@ class TableColumn:
 
     name: str
     data_type: str
-    is_nullable: bool
-    default: str
+    is_nullable: Union[bool, str]
+    default: Optional[str]
     value: Any = None
 
 
@@ -19,3 +19,5 @@ class Table:
 
     name: str
     columns: List[TableColumn]
+    ddl: Optional[str] = None
+    foreign_keys: List[str] = field(default_factory=list)

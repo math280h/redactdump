@@ -87,6 +87,22 @@ def test_invalid_output_type_rejected(tmp_path: Path) -> None:
         load(tmp_path, data)
 
 
+def test_output_ddl_flag_accepted(tmp_path: Path) -> None:
+    """The output.ddl flag validates and is preserved."""
+    data = base_config()
+    data["output"]["ddl"] = True
+    result = load(tmp_path, data)
+    assert result["output"]["ddl"] is True
+
+
+def test_output_ddl_non_bool_rejected(tmp_path: Path) -> None:
+    """A non-boolean ddl flag violates the schema."""
+    data = base_config()
+    data["output"]["ddl"] = "yes"
+    with pytest.raises(ValidationError):
+        load(tmp_path, data)
+
+
 def test_missing_connection_rejected(tmp_path: Path) -> None:
     """Connection is required."""
     data = base_config()

@@ -76,6 +76,21 @@ async def test_dump_empty_table_returns_no_location() -> None:
     file.write_to_file.assert_not_called()
 
 
+async def test_dump_empty_table_writes_ddl_when_enabled() -> None:
+    """With ddl enabled an empty table still writes its schema once."""
+    database = AsyncMock()
+    database.count_rows.return_value = 0
+    file = AsyncMock()
+    file.write_to_file.return_value = "users.sql"
+    app = make_app(make_config(output={"type": "file", "location": "out", "ddl": True}), database, file)
+    table = Table("users", [])
+
+    result = await app.dump(table)
+
+    assert result == (table, 0, "users.sql")
+    file.write_to_file.assert_awaited_once_with(table, [])
+
+
 async def test_dump_respects_max_rows_limit() -> None:
     """A configured max_rows_per_table overrides the live row count."""
     database = AsyncMock()
@@ -103,6 +118,22 @@ async def test_dump_respects_rows_per_request() -> None:
     await app.dump(table)
 
     assert database.get_data.call_args_list == [call(table, 0, 10), call(table, 10, 15)]
+
+
+async def test_run_writes_deferred_foreign_keys() -> None:
+    """After all data is dumped the table's foreign keys are written out."""
+    database = AsyncMock()
+    table = Table(
+        "orders", [], foreign_keys=['ALTER TABLE "orders" ADD CONSTRAINT "fk" FOREIGN KEY (uid) REFERENCES users(id);']
+    )
+    database.get_tables.return_value = [table]
+    database.count_rows.return_value = 0
+    file = AsyncMock()
+    app = make_app(make_config(), database, file)
+
+    await app.run()
+
+    file.write_statements.assert_awaited_once_with(table, table.foreign_keys)
 
 
 async def test_run_exits_when_no_tables() -> None:

@@ -76,6 +76,7 @@ class OutputConfig(StrictModel):
     type: Literal["file", "multi_file"]
     location: str
     naming: Optional[str] = None
+    ddl: Optional[bool] = None
 
 
 class RedactDumpConfig(StrictModel):

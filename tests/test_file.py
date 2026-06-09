@@ -18,6 +18,9 @@ def build_config(location: Path, naming: Optional[str] = None) -> dict:
     return {"debug": {"enabled": False}, "output": output}
 
 
+USERS_DDL = 'CREATE TABLE "users" (\n    "id" integer NOT NULL,\n    "name" character varying\n);'
+
+
 def sample_rows() -> list:
     """Return a single row with a numeric and a string column."""
     return [
@@ -216,6 +219,95 @@ def test_insert_statement_quotes_columns_and_values() -> None:
     assert statement == 'INSERT INTO users ("id", "name") VALUES (1, \'Bob\');'
 
 
+def test_insert_statement_uses_mysql_quoting() -> None:
+    """The mysql dialect produces backtick-quoted identifiers."""
+    row = [TableColumn("id", "integer", False, "", 1)]
+    statement = File.insert_statement(Table("users", []), row, "mysql")
+    assert statement == "INSERT INTO users (`id`) VALUES (1);"
+
+
+async def test_mysql_connection_quotes_inserts_with_backticks(tmp_path: Path) -> None:
+    """A MySQL connection makes write_to_file emit backtick-quoted identifiers."""
+    config = {
+        "connection": {"type": "mysql"},
+        "debug": {"enabled": False},
+        "output": {"type": "file", "location": str(tmp_path / "dump")},
+    }
+    file = File(config, Console())
+    assert file.dialect == "mysql"
+    await file.write_to_file(Table("users", []), sample_rows())
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert content == "INSERT INTO users (`id`, `name`) VALUES (1, 'Alice');\n"
+
+
+def test_format_value_mysql_numeric_is_unquoted() -> None:
+    """MySQL numeric type names render unquoted."""
+    assert File.format_value(column("int", 5), "mysql") == "5"
+    assert File.format_value(column("decimal", "1.50"), "mysql") == "1.50"
+    assert File.format_value(column("tinyint", 1), "mysql") == "1"
+
+
+def test_format_value_mysql_binary_is_hex_literal() -> None:
+    """MySQL binary types render as an X'..' hex literal, not PostgreSQL bytea."""
+    assert File.format_value(column("blob", b"\xde\xad\xbe\xef"), "mysql") == "X'deadbeef'"
+    assert File.format_value(column("varbinary", bytearray(b"\x01\x02")), "mysql") == "X'0102'"
+
+
+def test_format_value_mysql_escapes_backslash_and_quote() -> None:
+    """MySQL strings escape backslashes (an escape char) as well as single quotes."""
+    assert File.format_value(column("varchar", "a\\b'c"), "mysql") == "'a\\\\b''c'"
+
+
+def test_format_value_mysql_none_is_null() -> None:
+    """A None value is NULL under the mysql dialect too."""
+    assert File.format_value(column("blob", None), "mysql") == "NULL"
+
+
+def test_format_value_postgres_boolean() -> None:
+    """Booleans render as the SQL keywords TRUE/FALSE on PostgreSQL."""
+    assert File.format_value(column("boolean", True)) == "TRUE"
+    assert File.format_value(column("boolean", False)) == "FALSE"
+
+
+def test_format_value_postgres_json() -> None:
+    """A dict json value is serialised and cast to the json type."""
+    assert File.format_value(column("jsonb", {"a": 1})) == "'{\"a\": 1}'::jsonb"
+    assert File.format_value(column("json", {"a": 1})) == "'{\"a\": 1}'::json"
+
+
+def test_format_value_postgres_json_array_value() -> None:
+    """A list under a json column renders as a json array, not a PostgreSQL array."""
+    assert File.format_value(column("json", [1, 2])) == "'[1, 2]'::json"
+
+
+def test_format_value_postgres_array() -> None:
+    """A list under an array column renders as a PostgreSQL array literal."""
+    assert File.format_value(column("ARRAY", [1, 2, 3])) == "'{1,2,3}'"
+    assert File.format_value(column("ARRAY", ["x", "y"])) == '\'{"x","y"}\''
+
+
+def test_format_value_postgres_array_escapes_elements() -> None:
+    """Array elements escape quotes, and None and booleans use array keywords."""
+    assert File.format_value(column("ARRAY", ["a'b", None, True])) == "'{\"a''b\",NULL,true}'"
+
+
+def test_format_value_mysql_boolean_is_integer() -> None:
+    """Booleans render as 1/0 on MySQL."""
+    assert File.format_value(column("tinyint", True), "mysql") == "1"
+    assert File.format_value(column("tinyint", False), "mysql") == "0"
+
+
+def test_format_value_mysql_bit_is_integer() -> None:
+    """A MySQL BIT value (bytes) renders as its integer value."""
+    assert File.format_value(column("bit", b"\x0a"), "mysql") == "10"
+
+
+def test_format_value_mysql_json_dict_is_serialised() -> None:
+    """A dict json value is serialised to JSON text and quoted on MySQL."""
+    assert File.format_value(column("json", {"a": 1}), "mysql") == "'{\"a\": 1}'"
+
+
 def test_resolve_file_path_without_naming() -> None:
     """Without a naming template the single file is location.sql."""
     assert File.resolve_file_path({"location": "out/db"}) == "out/db.sql"
@@ -264,3 +356,88 @@ def test_debug_output_for_multi_file(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     assert "Created directory" in console.text
     assert (tmp_path / "generated").is_dir()
+
+
+async def test_no_ddl_when_table_has_none(tmp_path: Path) -> None:
+    """A table without DDL writes only its INSERT statements."""
+    file = File(build_config(tmp_path / "dump"), Console())
+    await file.write_to_file(Table("users", []), sample_rows())
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert "CREATE TABLE" not in content
+
+
+async def test_single_file_prepends_ddl_once(tmp_path: Path) -> None:
+    """The table DDL precedes the data and is written once across batches."""
+    file = File(build_config(tmp_path / "dump"), Console())
+    table = Table("users", [], ddl=USERS_DDL)
+    await file.write_to_file(table, sample_rows())
+    await file.write_to_file(table, sample_rows())
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert content.count("CREATE TABLE") == 1
+    assert content.startswith(USERS_DDL + "\n\n")
+    _, _, inserts = content.partition("\n\n")
+    assert inserts == (
+        'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
+        'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
+    )
+
+
+async def test_multi_file_includes_ddl(tmp_path: Path) -> None:
+    """A per-table file starts with its CREATE TABLE then the data."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    file = File(build_multi_config(outdir, naming="[table_name]"), Console())
+    await file.write_to_file(Table("users", [], ddl=USERS_DDL), sample_rows())
+
+    content = (outdir / "users.sql").read_text()
+    assert content.startswith(USERS_DDL + "\n\n")
+    assert content.endswith('INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n')
+
+
+async def test_ddl_only_payload_for_empty_rows(tmp_path: Path) -> None:
+    """Writing a table with no rows still emits its DDL."""
+    file = File(build_config(tmp_path / "dump"), Console())
+    await file.write_to_file(Table("users", [], ddl=USERS_DDL), [])
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert content == USERS_DDL + "\n\n"
+
+
+async def test_write_statements_appends_to_single_file(tmp_path: Path) -> None:
+    """Deferred statements are appended after the data in a single file."""
+    file = File(build_config(tmp_path / "dump"), Console())
+    await file.write_to_file(Table("orders", []), sample_rows())
+    fk = 'ALTER TABLE "orders" ADD CONSTRAINT "fk" FOREIGN KEY (uid) REFERENCES users(id);'
+    await file.write_statements(Table("orders", []), [fk])
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert content.endswith(fk + "\n")
+    assert content.index("INSERT INTO orders") < content.index("ALTER TABLE")
+
+
+async def test_write_statements_empty_is_noop(tmp_path: Path) -> None:
+    """No statements means nothing is written."""
+    file = File(build_config(tmp_path / "dump"), Console())
+    await file.write_statements(Table("orders", []), [])
+    assert (tmp_path / "dump.sql").read_text() == ""
+
+
+async def test_write_statements_appends_to_table_file_in_multi_file(tmp_path: Path) -> None:
+    """In multi_file mode statements go to the table's own file."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    file = File(build_multi_config(outdir, naming="[table_name]"), Console())
+    fk = 'ALTER TABLE "orders" ADD CONSTRAINT "fk" FOREIGN KEY (uid) REFERENCES users(id);'
+    await file.write_statements(Table("orders", []), [fk])
+
+    assert (outdir / "orders.sql").read_text() == fk + "\n"
+
+
+async def test_write_statements_unknown_type_writes_nothing(tmp_path: Path) -> None:
+    """An output type that is neither file nor multi_file writes no statements."""
+    file = File(build_config(tmp_path / "dump"), Console())
+    file.config["output"]["type"] = "other"
+    await file.write_statements(Table("orders", []), ["ALTER TABLE orders ADD x;"])
+    assert (tmp_path / "dump.sql").read_text() == ""

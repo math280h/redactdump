@@ -98,6 +98,9 @@ class RedactDump:
             location = await self.file.write_to_file(table, data)
             last_num = x
 
+        if location is None and self.config["output"].get("ddl"):
+            location = await self.file.write_to_file(table, [])
+
         return table, row_count, location
 
     async def run(self) -> None:
@@ -116,6 +119,9 @@ class RedactDump:
                     return await self.dump(table)
 
             result = await asyncio.gather(*(bounded_dump(table) for table in tables))
+
+            for table in tables:
+                await self.file.write_statements(table, table.foreign_keys)
 
             self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
             table = RichTable()
