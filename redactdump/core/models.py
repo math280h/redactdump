@@ -22,3 +22,6 @@ class Table:
     ddl: Optional[str] = None
     foreign_keys: List[str] = field(default_factory=list)
     primary_key: List[str] = field(default_factory=list)
+    # Set only when the schema was configured explicitly; output is then
+    # schema-qualified. None keeps the engine's default schema behaviour.
+    schema: Optional[str] = None

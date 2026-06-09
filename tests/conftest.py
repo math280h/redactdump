@@ -131,7 +131,7 @@ class FakeEngine:
             table_name = (params or {}).get("table_name", "")
             return [FakeRow(column) for column in self.schema.get(table_name, [])]
         if "SHOW CREATE TABLE" in sql:
-            match = re.search(r"SHOW CREATE TABLE `(\w+)`", sql)
+            match = re.search(r"SHOW CREATE TABLE (?:`\w+`\.)?`(\w+)`", sql)
             name = match.group(1) if match else ""
             return [FakeRow({"Table": name, "Create Table": self.create_statements.get(name, "")})]
         if "pg_catalog.pg_attribute" in sql and "format_type" in sql:
@@ -162,7 +162,7 @@ class FakeEngine:
 
     @staticmethod
     def _table_from_sql(sql: str) -> str:
-        match = re.search(r"FROM (\w+)", sql)
+        match = re.search(r"FROM (?:\w+\.)?(\w+)", sql)
         return match.group(1) if match else ""
 
 

@@ -73,20 +73,24 @@ def build_config(
     patterns: Optional[Dict[str, Any]] = None,
     select_columns: Optional[List[str]] = None,
     ddl: bool = False,
+    schema: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a loaded-style config pointed at the live database."""
     output: Dict[str, Any] = {"type": "file", "location": "out"}
     if ddl:
         output["ddl"] = True
+    connection: Dict[str, Any] = {
+        "type": CONNECTION_TYPES[INTEGRATION_DB],
+        "host": HOST,
+        "port": PORT,
+        "username": USER,
+        "password": PASSWORD,
+        "database": DATABASE,
+    }
+    if schema:
+        connection["schema"] = schema
     return {
-        "connection": {
-            "type": CONNECTION_TYPES[INTEGRATION_DB],
-            "host": HOST,
-            "port": PORT,
-            "username": USER,
-            "password": PASSWORD,
-            "database": DATABASE,
-        },
+        "connection": connection,
         "limits": {"select_columns": select_columns or []},
         "performance": {},
         "debug": {"enabled": False},
@@ -291,6 +295,54 @@ async def test_pg_ddl_recreates_and_positions_sequences(
         conn.execute(text("INSERT INTO serial_t (label) VALUES ('d')"))
         new_id = conn.execute(text("SELECT max(id) FROM serial_t")).scalar()
     assert new_id == 4
+
+
+@pytest.fixture
+def accounting_table(setup_engine: Engine) -> Iterator[None]:
+    """Create a table inside a non-default schema, then drop the schema."""
+    if CONNECTION_TYPES[INTEGRATION_DB] != "pgsql":
+        pytest.skip("custom schemas are exercised on PostgreSQL")
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA IF EXISTS accounting CASCADE"))
+        conn.execute(text("CREATE SCHEMA accounting"))
+        conn.execute(text("CREATE TABLE accounting.invoices (id INTEGER NOT NULL PRIMARY KEY, ref VARCHAR(20))"))
+        conn.execute(text("INSERT INTO accounting.invoices (id, ref) VALUES (1, 'A-1'), (2, 'A-2')"))
+    yield
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA IF EXISTS accounting CASCADE"))
+
+
+async def test_configured_schema_dump_and_replay(
+    accounting_table: None, make_database: Callable[..., Database], setup_engine: Engine, tmp_path: Path
+) -> None:
+    """A configured schema is read from and the dump replays into it."""
+    database = make_database(ddl=True, schema="accounting")
+    table = await find_table(database, "invoices")
+    assert table.schema == "accounting"
+    rows = await database.get_data(table, 0, 10)
+
+    file_config = {
+        "connection": {"type": CONNECTION_TYPES[INTEGRATION_DB]},
+        "debug": {"enabled": False},
+        "output": {"type": "file", "location": str(tmp_path / "dump")},
+    }
+    output = File(file_config, Console())
+    await output.write_to_file(table, rows)
+    dump_sql = (tmp_path / "dump.sql").read_text()
+    assert 'CREATE TABLE "accounting"."invoices"' in dump_sql
+    assert 'INSERT INTO "accounting"."invoices"' in dump_sql
+
+    # Replay onto the empty schema and read the rows back through it.
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP TABLE accounting.invoices"))
+        for statement in (chunk.strip() for chunk in dump_sql.split(";")):
+            if statement:
+                conn.execute(text(statement))
+
+    reloaded = make_database(schema="accounting")
+    reread = await reloaded.get_data(await find_table(reloaded, "invoices"), 0, 10)
+    restored = sorted((value_of(row, "id"), value_of(row, "ref")) for row in reread)
+    assert restored == [(1, "A-1"), (2, "A-2")]
 
 
 async def test_dump_ddl_and_data_round_trip(

@@ -152,6 +152,22 @@ def test_non_integer_port_rejected(tmp_path: Path) -> None:
         load(tmp_path, data)
 
 
+def test_connection_schema_accepted(tmp_path: Path) -> None:
+    """The connection.schema key validates and is preserved."""
+    data = base_config()
+    data["connection"]["schema"] = "accounting"
+    result = load(tmp_path, data)
+    assert result["connection"]["schema"] == "accounting"
+
+
+def test_non_string_connection_schema_rejected(tmp_path: Path) -> None:
+    """A non-string connection.schema violates the schema."""
+    data = base_config()
+    data["connection"]["schema"] = 5
+    with pytest.raises(RedactDumpError):
+        load(tmp_path, data)
+
+
 def test_pattern_replacement_none_allowed(tmp_path: Path) -> None:
     """A null replacement in a pattern is permitted by the schema."""
     data = base_config()

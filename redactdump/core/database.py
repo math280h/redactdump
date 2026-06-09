@@ -143,6 +143,10 @@ class Database:
         self.redactor = Redactor(config)
         self.warned_tables: Set[str] = set()
 
+        # An explicitly configured schema; None keeps the engine's default
+        # (public, dbo or the connection database) and unqualified output.
+        self.configured_schema: Optional[str] = self.config["connection"].get("schema")
+
         limits = self.config.get("limits", {})
         self.include_tables = self.compile_table_filters(limits.get("tables"), "tables")
         self.exclude_tables = self.compile_table_filters(limits.get("exclude_tables"), "exclude_tables")
@@ -245,7 +249,9 @@ class Database:
         Returns:
             List[str]: A list of tables.
         """
-        if self.engine.dialect.name == "mysql":
+        if self.configured_schema:
+            schema = self.configured_schema
+        elif self.engine.dialect.name == "mysql":
             schema = self.config["connection"]["database"]
         elif self.engine.dialect.name == "mssql":
             schema = "dbo"
@@ -292,7 +298,7 @@ class Database:
                                 )
                             )
 
-                    table_obj = Table(table[0], table_columns)
+                    table_obj = Table(table[0], table_columns, schema=self.configured_schema)
                     table_obj.primary_key = await self.get_primary_key(conn, table[0], schema)
                     if self.config["output"].get("ddl"):
                         table_obj.ddl = await self.build_ddl(conn, table[0], schema)
@@ -328,6 +334,7 @@ class Database:
         columns: Sequence[Tuple[str, str, bool, Optional[str]]],
         primary_key: Sequence[str],
         quote: Callable[[str], str],
+        schema: Optional[str] = None,
     ) -> str:
         """Assemble a CREATE TABLE statement from reconstructed column metadata.
 
@@ -336,6 +343,7 @@ class Database:
             columns (Sequence): (name, type, not_null, default) per column, in order.
             primary_key (Sequence[str]): Primary key column names, in key order.
             quote (Callable): Renders an identifier quoted for the dialect.
+            schema (Optional[str]): Qualifies the table name when set.
 
         Returns:
             str: The CREATE TABLE statement.
@@ -352,13 +360,15 @@ class Database:
             keys = ", ".join(quote(name) for name in primary_key)
             definitions.append(f"    PRIMARY KEY ({keys})")
         body = ",\n".join(definitions)
-        return f"CREATE TABLE {quote(table_name)} (\n{body}\n);"
+        name = f"{quote(schema)}.{quote(table_name)}" if schema else quote(table_name)
+        return f"CREATE TABLE {name} (\n{body}\n);"
 
     @staticmethod
     def postgres_ddl(
         table_name: str,
         columns: Sequence[Tuple[str, str, bool, Optional[str]]],
         primary_key: Sequence[str],
+        schema: Optional[str] = None,
     ) -> str:
         """Assemble a PostgreSQL CREATE TABLE from reconstructed column metadata.
 
@@ -366,17 +376,19 @@ class Database:
             table_name (str): Name of the table.
             columns (Sequence): (name, type, not_null, default) per column, in order.
             primary_key (Sequence[str]): Primary key column names, in key order.
+            schema (Optional[str]): Qualifies the table name when set.
 
         Returns:
             str: The CREATE TABLE statement.
         """
-        return Database.assemble_ddl(table_name, columns, primary_key, lambda name: f'"{name}"')
+        return Database.assemble_ddl(table_name, columns, primary_key, lambda name: f'"{name}"', schema)
 
     @staticmethod
     def mssql_ddl(
         table_name: str,
         columns: Sequence[Tuple[str, str, bool, Optional[str]]],
         primary_key: Sequence[str],
+        schema: Optional[str] = None,
     ) -> str:
         """Assemble a SQL Server CREATE TABLE from reconstructed column metadata.
 
@@ -384,11 +396,12 @@ class Database:
             table_name (str): Name of the table.
             columns (Sequence): (name, type, not_null, default) per column, in order.
             primary_key (Sequence[str]): Primary key column names, in key order.
+            schema (Optional[str]): Qualifies the table name when set.
 
         Returns:
             str: The CREATE TABLE statement.
         """
-        return Database.assemble_ddl(table_name, columns, primary_key, lambda name: f"[{name}]")
+        return Database.assemble_ddl(table_name, columns, primary_key, lambda name: f"[{name}]", schema)
 
     @staticmethod
     def mssql_column_type(
@@ -420,12 +433,13 @@ class Database:
         return data_type
 
     @staticmethod
-    def mssql_index_statements(table_name: str, rows: Sequence[Any]) -> List[str]:
+    def mssql_index_statements(table_name: str, rows: Sequence[Any], schema: Optional[str] = None) -> List[str]:
         """Regroup per-column index rows into CREATE INDEX statements.
 
         Args:
             table_name (str): Name of the table.
             rows (Sequence): (index_name, is_unique, column_name) per key column.
+            schema (Optional[str]): Qualifies the table name when set.
 
         Returns:
             List[str]: One CREATE [UNIQUE] INDEX statement per index.
@@ -434,21 +448,23 @@ class Database:
         for row in rows:
             entry = indexes.setdefault(row.index_name, (bool(row.is_unique), []))
             entry[1].append(row.column_name)
+        target = f"[{schema}].[{table_name}]" if schema else f"[{table_name}]"
         statements = []
         for name, (is_unique, column_names) in indexes.items():
             unique = "UNIQUE " if is_unique else ""
             columns = ", ".join(f"[{column}]" for column in column_names)
-            statements.append(f"CREATE {unique}INDEX [{name}] ON [{table_name}] ({columns});")
+            statements.append(f"CREATE {unique}INDEX [{name}] ON {target} ({columns});")
         return statements
 
     @staticmethod
-    def mssql_foreign_key_statements(table_name: str, rows: Sequence[Any]) -> List[str]:
+    def mssql_foreign_key_statements(table_name: str, rows: Sequence[Any], schema: Optional[str] = None) -> List[str]:
         """Regroup per-column foreign key rows into ALTER TABLE statements.
 
         Args:
             table_name (str): Name of the table.
             rows (Sequence): (name, column_name, referenced_table, referenced_column)
                 per column pair, ordered by constraint and column position.
+            schema (Optional[str]): Qualifies both table names when set.
 
         Returns:
             List[str]: One ALTER TABLE ... ADD CONSTRAINT statement per key.
@@ -458,13 +474,15 @@ class Database:
             entry = constraints.setdefault(row.name, (row.referenced_table, [], []))
             entry[1].append(row.column_name)
             entry[2].append(row.referenced_column)
+        target = f"[{schema}].[{table_name}]" if schema else f"[{table_name}]"
         statements = []
         for name, (referenced_table, column_names, referenced_names) in constraints.items():
             columns = ", ".join(f"[{column}]" for column in column_names)
             referenced = ", ".join(f"[{column}]" for column in referenced_names)
+            referenced_target = f"[{schema}].[{referenced_table}]" if schema else f"[{referenced_table}]"
             statements.append(
-                f"ALTER TABLE [{table_name}] ADD CONSTRAINT [{name}] "
-                f"FOREIGN KEY ({columns}) REFERENCES [{referenced_table}] ({referenced});"
+                f"ALTER TABLE {target} ADD CONSTRAINT [{name}] "
+                f"FOREIGN KEY ({columns}) REFERENCES {referenced_target} ({referenced});"
             )
         return statements
 
@@ -485,7 +503,9 @@ class Database:
             str: The CREATE TABLE statement.
         """
         if self.engine.dialect.name == "mysql":
-            result = await conn.execute(text(f"SHOW CREATE TABLE `{table_name}`"))
+            # Qualify with the schema (the connection database by default) so
+            # a configured schema reads the right table.
+            result = await conn.execute(text(f"SHOW CREATE TABLE `{schema}`.`{table_name}`"))
             create_statement = list(result)[0][1]
             return f"{create_statement};"
 
@@ -496,7 +516,7 @@ class Database:
         columns = [(row.name, row.data_type, row.not_null, row.default_value) for row in columns_result]
         key_result = await conn.execute(text(POSTGRES_PRIMARY_KEY_SQL), {"schema": schema, "table": table_name})
         primary_key = [row.name for row in key_result]
-        ddl = self.postgres_ddl(table_name, columns, primary_key)
+        ddl = self.postgres_ddl(table_name, columns, primary_key, self.configured_schema)
 
         sequences = await self.postgres_sequence_statements(conn, columns)
         if sequences:
@@ -575,10 +595,10 @@ class Database:
         ]
         key_result = await conn.execute(text(MSSQL_PRIMARY_KEY_SQL), {"schema": schema, "table": table_name})
         primary_key = [row.name for row in key_result]
-        ddl = self.mssql_ddl(table_name, columns, primary_key)
+        ddl = self.mssql_ddl(table_name, columns, primary_key, self.configured_schema)
 
         index_result = await conn.execute(text(MSSQL_INDEXES_SQL), {"schema": schema, "table": table_name})
-        indexes = self.mssql_index_statements(table_name, list(index_result))
+        indexes = self.mssql_index_statements(table_name, list(index_result), self.configured_schema)
         if indexes:
             ddl += "\n" + "\n".join(indexes)
         return ddl
@@ -603,9 +623,10 @@ class Database:
             return []
         if self.engine.dialect.name == "mssql":
             result = await conn.execute(text(MSSQL_FOREIGN_KEYS_SQL), {"schema": schema, "table": table_name})
-            return self.mssql_foreign_key_statements(table_name, list(result))
+            return self.mssql_foreign_key_statements(table_name, list(result), self.configured_schema)
         result = await conn.execute(text(POSTGRES_FOREIGN_KEYS_SQL), {"schema": schema, "table": table_name})
-        return [f'ALTER TABLE "{table_name}" ADD CONSTRAINT "{row.name}" {row.definition};' for row in result]
+        target = f'"{self.configured_schema}"."{table_name}"' if self.configured_schema else f'"{table_name}"'
+        return [f'ALTER TABLE {target} ADD CONSTRAINT "{row.name}" {row.definition};' for row in result]
 
     async def count_rows(self, table: Table, conn: Optional[Any] = None) -> int:
         """Get the number of rows in a table.
@@ -626,7 +647,7 @@ class Database:
     @staticmethod
     async def _count_rows(conn: Any, table: Table) -> int:
         """Run the COUNT(*) query on an open connection."""
-        result = await conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name)))
+        result = await conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name, schema=table.schema)))
         for item in result:
             return item[0]
         return 0
@@ -697,7 +718,12 @@ class Database:
                 f"[cyan]DEBUG: Running 'SELECT {select_value} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
             )
 
-        query = select(text(select_value)).offset(offset).limit(limit).select_from(sql_table(table.name))
+        query = (
+            select(text(select_value))
+            .offset(offset)
+            .limit(limit)
+            .select_from(sql_table(table.name, schema=table.schema))
+        )
         order = self.order_clause(table)
         if order is not None:
             query = query.order_by(text(order))

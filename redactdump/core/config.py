@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from redactdump.core.errors import RedactDumpError
 
@@ -22,6 +22,9 @@ class ConnectionConfig(StrictModel):
     username: Optional[str] = None
     password: Optional[str] = None
     driver: Optional[str] = None
+    # "schema" shadows a BaseModel attribute, so the field lives under an
+    # alias; the config file key is still connection.schema.
+    db_schema: Optional[str] = Field(default=None, alias="schema")
 
 
 class LimitsConfig(StrictModel):
