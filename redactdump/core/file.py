@@ -1,9 +1,10 @@
+import asyncio
 import os
 import re
-import threading
 from datetime import datetime, timezone
 from typing import List, Optional, Union
 
+import aiofiles
 from rich.console import Console
 
 from redactdump.core.models import Table, TableColumn
@@ -44,7 +45,7 @@ class File:
         """
         self.config = config
         self.console = console
-        self.lock = threading.Lock()
+        self.lock = asyncio.Lock()
 
         output = self.config["output"]
         self.file_path: Optional[str] = self.resolve_file_path(output) if output["type"] == "file" else None
@@ -164,7 +165,7 @@ class File:
         columns = ", ".join(f'"{column.name}"' for column in row)
         return f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});"
 
-    def write_to_file(self, table: Table, rows: List[List[TableColumn]]) -> Union[str, None]:
+    async def write_to_file(self, table: Table, rows: List[List[TableColumn]]) -> Union[str, None]:
         """Write data to file.
 
         Args:
@@ -177,13 +178,14 @@ class File:
         output = self.config["output"]
         if output["type"] == "multi_file":
             name = self.get_name(output, table)
-            with open(f"{output['location']}/{name}", "a") as file:
-                for row in rows:
-                    file.write(f"{self.insert_statement(table, row)}\n")
+            payload = "".join(f"{self.insert_statement(table, row)}\n" for row in rows)
+            async with aiofiles.open(f"{output['location']}/{name}", "a") as file:
+                await file.write(payload)
             return name
         if output["type"] == "file" and self.file_path is not None:
-            with self.lock, open(self.file_path, "a") as file:
-                for row in rows:
-                    file.write(f"{self.insert_statement(table, row)}\n")
+            payload = "".join(f"{self.insert_statement(table, row)}\n" for row in rows)
+            async with self.lock:
+                async with aiofiles.open(self.file_path, "a") as file:
+                    await file.write(payload)
             return os.path.basename(self.file_path)
         return None

@@ -33,7 +33,7 @@ Options:
   -c, --config TEXT      Path to dump configuration. [required]
   -u, --user TEXT        Connection username.
   -p, --password TEXT    Connection password.
-  --max-workers INTEGER  Max number of workers. [default: 4]
+  --max-workers INTEGER  Max number of tables dumped concurrently. [default: 4]
   -d, --debug            Enable debug mode.
   --help                 Show this message and exit.
 ```
@@ -153,3 +153,25 @@ INSERT INTO table_name VALUES (99, 'Robin Jefferson');
 ## Data types
 
 PostgreSQL-specific types (`inet`, `cidr`, `macaddr`, `macaddr8`, `interval`, `point`, `line`, `lseg`, `box`, `circle`, `polygon`, `tsvector`, `tsquery`, `pg_lsn`, `pg_snapshot`, `txid_snapshot`) are exported with an explicit `::type` cast, and `bytea` is exported as a hex literal. Redacting one of these columns requires a replacement that produces a value valid for the type.
+
+## Performance
+
+redactdump runs on an asyncio pipeline. Tables are dumped concurrently (bounded
+by `--max-workers`) using async database drivers (`psycopg` for PostgreSQL,
+`aiomysql` for MySQL) and async file writes via `aiofiles`.
+
+### Benchmark
+
+`benchmarks/benchmark_dump.py` seeds a live PostgreSQL database, runs the full
+dump pipeline and reports throughput in rows per second. Connection settings
+come from `BENCH_DB_*` environment variables and default to the docker-compose
+Postgres service.
+
+```shell
+docker compose up -d
+uv run python benchmarks/benchmark_dump.py --rows 40000 --tables 4 --iterations 3
+```
+
+CI runs the same benchmark on every pull request via
+`.github/workflows/benchmark.yaml`, tracks the result over time and fails the
+build if throughput regresses significantly against the `main` baseline.

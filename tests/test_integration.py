@@ -8,7 +8,7 @@ INTEGRATION_* environment variables.
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 import pytest
 from rich.console import Console
@@ -39,7 +39,7 @@ DATABASE = os.environ.get("INTEGRATION_DATABASE", "test")
 
 
 def connection_url() -> str:
-    """Build the SQLAlchemy URL for the configured database."""
+    """Build the synchronous SQLAlchemy URL used for schema setup and teardown."""
     return f"{DRIVER_URLS[INTEGRATION_DB]}://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}"
 
 
@@ -67,7 +67,7 @@ def build_config(
 
 @pytest.fixture(scope="module")
 def setup_engine() -> Iterator[Engine]:
-    """Provide a raw engine for schema setup and teardown."""
+    """Provide a raw synchronous engine for schema setup and teardown."""
     engine = create_engine(connection_url())
     yield engine
     engine.dispose()
@@ -87,9 +87,24 @@ def users_table(setup_engine: Engine) -> Iterator[None]:
         conn.execute(text("DROP TABLE IF EXISTS users"))
 
 
-def find_table(database: Database, name: str) -> Table:
+@pytest.fixture
+async def make_database() -> AsyncIterator[Callable[..., Database]]:
+    """Build Database instances and dispose their async engines on teardown."""
+    created: List[Database] = []
+
+    def factory(**kwargs: Any) -> Database:
+        database = Database(build_config(**kwargs), Console())
+        created.append(database)
+        return database
+
+    yield factory
+    for database in created:
+        await database.dispose()
+
+
+async def find_table(database: Database, name: str) -> Table:
     """Return the named table from a get_tables result."""
-    return next(table for table in database.get_tables() if table.name == name)
+    return next(table for table in await database.get_tables() if table.name == name)
 
 
 def value_of(row: List[TableColumn], name: str) -> Any:
@@ -97,59 +112,63 @@ def value_of(row: List[TableColumn], name: str) -> Any:
     return next(column.value for column in row if column.name == name)
 
 
-def test_get_tables_discovers_table_and_columns(users_table: None) -> None:
+async def test_get_tables_discovers_table_and_columns(
+    users_table: None, make_database: Callable[..., Database]
+) -> None:
     """get_tables finds the created table and all of its columns."""
-    database = Database(build_config(), Console())
-    table = find_table(database, "users")
+    database = make_database()
+    table = await find_table(database, "users")
     assert {column.name for column in table.columns} == {"id", "name", "email"}
 
 
-def test_count_rows_matches_inserted(users_table: None) -> None:
+async def test_count_rows_matches_inserted(users_table: None, make_database: Callable[..., Database]) -> None:
     """count_rows reports the exact number of inserted rows."""
-    database = Database(build_config(), Console())
-    assert database.count_rows(find_table(database, "users")) == 2
+    database = make_database()
+    assert await database.count_rows(await find_table(database, "users")) == 2
 
 
-def test_get_data_reads_all_rows(users_table: None) -> None:
+async def test_get_data_reads_all_rows(users_table: None, make_database: Callable[..., Database]) -> None:
     """get_data returns every row with its original values."""
-    database = Database(build_config(), Console())
-    rows = database.get_data(find_table(database, "users"), 0, 10)
+    database = make_database()
+    rows = await database.get_data(await find_table(database, "users"), 0, 10)
     extracted = sorted((value_of(row, "id"), value_of(row, "name"), value_of(row, "email")) for row in rows)
     assert extracted == [(1, "Alice", "alice@x.com"), (2, "Bob", "bob@x.com")]
 
 
-def test_get_data_honours_offset_and_limit(users_table: None) -> None:
+async def test_get_data_honours_offset_and_limit(users_table: None, make_database: Callable[..., Database]) -> None:
     """get_data applies offset and limit against the live database."""
-    database = Database(build_config(), Console())
-    rows = database.get_data(find_table(database, "users"), 0, 1)
+    database = make_database()
+    rows = await database.get_data(await find_table(database, "users"), 0, 1)
     assert len(rows) == 1
 
 
-def test_get_data_applies_redaction(users_table: None) -> None:
+async def test_get_data_applies_redaction(users_table: None, make_database: Callable[..., Database]) -> None:
     """A data rule replaces matching values read from the live database."""
     patterns = {"data": [{"pattern": "@x.com", "replacement": "email"}]}
-    database = Database(build_config(patterns=patterns), Console())
-    rows = database.get_data(find_table(database, "users"), 0, 10)
+    database = make_database(patterns=patterns)
+    rows = await database.get_data(await find_table(database, "users"), 0, 10)
     emails = [value_of(row, "email") for row in rows]
     assert set(emails).isdisjoint({"alice@x.com", "bob@x.com"})
 
 
-def test_select_columns_projection(users_table: None) -> None:
+async def test_select_columns_projection(users_table: None, make_database: Callable[..., Database]) -> None:
     """select_columns restricts the columns read from the live database."""
-    database = Database(build_config(select_columns=["id"]), Console())
-    rows = database.get_data(find_table(database, "users"), 0, 10)
+    database = make_database(select_columns=["id"])
+    rows = await database.get_data(await find_table(database, "users"), 0, 10)
     assert all([column.name for column in row] == ["id"] for row in rows)
 
 
-def test_end_to_end_dump_to_file(users_table: None, tmp_path: Path) -> None:
+async def test_end_to_end_dump_to_file(
+    users_table: None, make_database: Callable[..., Database], tmp_path: Path
+) -> None:
     """Reading the live table and writing it produces INSERT statements."""
-    database = Database(build_config(), Console())
-    table = find_table(database, "users")
-    rows = database.get_data(table, 0, 10)
+    database = make_database()
+    table = await find_table(database, "users")
+    rows = await database.get_data(table, 0, 10)
 
     file_config = {"debug": {"enabled": False}, "output": {"type": "file", "location": str(tmp_path / "dump")}}
     output = File(file_config, Console())
-    output.write_to_file(table, rows)
+    await output.write_to_file(table, rows)
 
     content = (tmp_path / "dump.sql").read_text()
     assert content.count("INSERT INTO users") == 2

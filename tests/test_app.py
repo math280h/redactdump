@@ -1,9 +1,8 @@
 """Tests for the RedactDump application orchestration and CLI wiring."""
 
-import asyncio
 from pathlib import Path
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 import yaml
@@ -32,118 +31,121 @@ def make_app(
     return app
 
 
-def test_dump_paginates_with_default_step() -> None:
+async def test_dump_paginates_with_default_step() -> None:
     """A row count above the step issues offset and limit batched reads."""
-    database = MagicMock()
+    database = AsyncMock()
     database.count_rows.return_value = 250
-    file = MagicMock()
+    file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
     app = make_app(make_config(), database, file)
     table = Table("users", [])
 
-    result = app.dump(table)
+    result = await app.dump(table)
 
     assert result == (table, 250, "dump.sql")
     assert database.get_data.call_args_list == [call(table, 0, 100), call(table, 100, 150)]
 
 
-def test_dump_single_batch_below_step() -> None:
+async def test_dump_single_batch_below_step() -> None:
     """A small table is read in a single batch."""
-    database = MagicMock()
+    database = AsyncMock()
     database.count_rows.return_value = 50
-    file = MagicMock()
+    file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
     app = make_app(make_config(), database, file)
     table = Table("users", [])
 
-    result = app.dump(table)
+    result = await app.dump(table)
 
     assert result == (table, 50, "dump.sql")
     assert database.get_data.call_args_list == [call(table, 0, 150)]
 
 
-def test_dump_empty_table_returns_no_location() -> None:
+async def test_dump_empty_table_returns_no_location() -> None:
     """An empty table performs no writes and reports no output file."""
-    database = MagicMock()
+    database = AsyncMock()
     database.count_rows.return_value = 0
-    file = MagicMock()
+    file = AsyncMock()
     app = make_app(make_config(), database, file)
     table = Table("users", [])
 
-    result = app.dump(table)
+    result = await app.dump(table)
 
     assert result == (table, 0, None)
     database.get_data.assert_not_called()
     file.write_to_file.assert_not_called()
 
 
-def test_dump_respects_max_rows_limit() -> None:
+async def test_dump_respects_max_rows_limit() -> None:
     """A configured max_rows_per_table overrides the live row count."""
-    database = MagicMock()
-    file = MagicMock()
+    database = AsyncMock()
+    file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
     app = make_app(make_config(limits={"max_rows_per_table": 30}), database, file)
     table = Table("users", [])
 
-    result = app.dump(table)
+    result = await app.dump(table)
 
     assert result[1] == 30
     database.count_rows.assert_not_called()
     assert database.get_data.call_args_list == [call(table, 0, 130)]
 
 
-def test_dump_respects_rows_per_request() -> None:
+async def test_dump_respects_rows_per_request() -> None:
     """A configured rows_per_request changes the batch step."""
-    database = MagicMock()
+    database = AsyncMock()
     database.count_rows.return_value = 25
-    file = MagicMock()
+    file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
     app = make_app(make_config(performance={"rows_per_request": 10}), database, file)
     table = Table("users", [])
 
-    app.dump(table)
+    await app.dump(table)
 
     assert database.get_data.call_args_list == [call(table, 0, 10), call(table, 10, 15)]
 
 
-def test_run_exits_when_no_tables() -> None:
+async def test_run_exits_when_no_tables() -> None:
     """An empty database aborts the run."""
-    database = MagicMock()
+    database = AsyncMock()
     database.get_tables.return_value = []
-    app = make_app(make_config(), database, MagicMock())
+    app = make_app(make_config(), database, AsyncMock())
 
     with pytest.raises(SystemExit):
-        asyncio.run(app.run())
+        await app.run()
+
+    database.dispose.assert_awaited_once()
 
 
-def test_run_reports_each_table(capturing_console: CapturingConsole) -> None:
+async def test_run_reports_each_table(capturing_console: CapturingConsole) -> None:
     """A successful run summarises every dumped table."""
-    database = MagicMock()
+    database = AsyncMock()
     database.get_tables.return_value = [Table("alpha", []), Table("beta", [])]
     database.count_rows.return_value = 5
     database.get_data.return_value = []
-    file = MagicMock()
+    file = AsyncMock()
     file.write_to_file.return_value = "out.sql"
     app = make_app(make_config(), database, file, console=capturing_console.console)
 
-    asyncio.run(app.run())
+    await app.run()
 
     text = capturing_console.text
     assert "Finished working 2 tables" in text
     assert "alpha" in text and "beta" in text
+    database.dispose.assert_awaited_once()
 
 
-def test_run_marks_limited_row_counts(capturing_console: CapturingConsole) -> None:
+async def test_run_marks_limited_row_counts(capturing_console: CapturingConsole) -> None:
     """When a row limit is configured the summary flags it."""
-    database = MagicMock()
+    database = AsyncMock()
     database.get_tables.return_value = [Table("alpha", [])]
     database.get_data.return_value = []
-    file = MagicMock()
+    file = AsyncMock()
     file.write_to_file.return_value = "alpha.sql"
     config = make_config(limits={"max_rows_per_table": 10})
     app = make_app(config, database, file, console=capturing_console.console)
 
-    asyncio.run(app.run())
+    await app.run()
 
     assert "Limited via config" in capturing_console.text
 

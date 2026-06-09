@@ -1,16 +1,25 @@
 """Shared fixtures and a fake SQLAlchemy engine used across the test suite."""
 
+import asyncio
 import io
 import re
-from contextlib import contextmanager
+import sys
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
 from rich.console import Console
 
 from redactdump.core.database import Database
+
+
+def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> Optional[dict]:
+    """Force a selector event loop on Windows so the async drivers can connect."""
+    if sys.platform == "win32":
+        return {"selector": asyncio.SelectorEventLoop}
+    return None
 
 
 class FakeRow:
@@ -30,31 +39,31 @@ class FakeRow:
 
 
 class FakeConnection:
-    """Minimal stand-in for a SQLAlchemy connection."""
+    """Minimal stand-in for a SQLAlchemy async connection."""
 
     def __init__(self, engine: "FakeEngine") -> None:
         self.engine = engine
 
-    def execution_options(self, **kwargs: Any) -> "FakeConnection":
-        """Record the options and return self, mirroring SQLAlchemy."""
+    async def execution_options(self, **kwargs: Any) -> "FakeConnection":
+        """Record the options and return self, mirroring SQLAlchemy's async API."""
         self.engine.execution_options_calls.append(kwargs)
         return self
 
-    @contextmanager
-    def begin(self) -> Iterator["FakeConnection"]:
+    @asynccontextmanager
+    async def begin(self) -> AsyncIterator["FakeConnection"]:
         """Yield self as a no-op transaction context manager."""
         yield self
 
-    def execute(self, statement: Any, params: Optional[Dict[str, Any]] = None) -> List[FakeRow]:
+    async def execute(self, statement: Any, params: Optional[Dict[str, Any]] = None) -> List[FakeRow]:
         """Record the statement and return rows resolved from the engine fixtures."""
         sql = str(statement)
         self.engine.executed.append((sql, params, statement))
         return self.engine.resolve(sql, params)
 
-    def __enter__(self) -> "FakeConnection":
+    async def __aenter__(self) -> "FakeConnection":
         return self
 
-    def __exit__(self, *exc: Any) -> bool:
+    async def __aexit__(self, *exc: Any) -> bool:
         return False
 
 
@@ -74,10 +83,15 @@ class FakeEngine:
         self.executed: List[Any] = []
         self.execution_options_calls: List[Dict[str, Any]] = []
         self.dialect = SimpleNamespace(name=dialect_name)
+        self.disposed = False
 
     def connect(self) -> FakeConnection:
         """Return a fresh fake connection."""
         return FakeConnection(self)
+
+    async def dispose(self) -> None:
+        """Record that the engine was disposed."""
+        self.disposed = True
 
     def resolve(self, sql: str, params: Optional[Dict[str, Any]]) -> List[FakeRow]:
         """Return rows for a statement based on its SQL text."""
@@ -134,7 +148,7 @@ def make_config(
 
 def build_database(config: Dict[str, Any], engine: FakeEngine, console: Optional[Console] = None) -> Database:
     """Construct a Database whose engine is the supplied fake."""
-    with patch("redactdump.core.database.create_engine", return_value=engine):
+    with patch("redactdump.core.database.create_async_engine", return_value=engine):
         return Database(config, console or Console())
 
 
