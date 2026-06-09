@@ -25,6 +25,12 @@ jobs:
     - name: Run tests
       run: uv run pytest
 
+    - name: Install a faker community provider
+      run: uv pip install faker-vehicle
+
+    - name: Run community provider tests
+      run: uv run pytest -m community --no-cov
+
     - name: Build coverage summary
       if: ${{ !cancelled() && github.event_name == 'pull_request' }}
       run: |

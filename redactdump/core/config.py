@@ -64,6 +64,7 @@ class PatternsConfig(StrictModel):
 class RedactConfig(StrictModel):
     """Redaction rules."""
 
+    providers: Optional[List[str]] = None
     columns: Optional[Dict[str, List[NamedColumn]]] = None
     patterns: Optional[PatternsConfig] = None
 

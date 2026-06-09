@@ -143,6 +143,22 @@ def test_named_columns_section_accepted(tmp_path: Path) -> None:
     assert result["redact"]["columns"]["users"][0]["name"] == "email"
 
 
+def test_providers_section_accepted(tmp_path: Path) -> None:
+    """The redact.providers list validates against the schema."""
+    data = base_config()
+    data["redact"]["providers"] = ["faker_vehicle.VehicleProvider"]
+    result = load(tmp_path, data)
+    assert result["redact"]["providers"] == ["faker_vehicle.VehicleProvider"]
+
+
+def test_non_string_provider_rejected(tmp_path: Path) -> None:
+    """A non-string provider entry violates the schema."""
+    data = base_config()
+    data["redact"]["providers"] = [123]
+    with pytest.raises(ValidationError):
+        load(tmp_path, data)
+
+
 def test_load_does_not_mutate_unrelated_keys(tmp_path: Path) -> None:
     """Loading only augments defaults and leaves provided data intact."""
     data = base_config()
