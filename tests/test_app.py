@@ -181,6 +181,72 @@ async def test_run_marks_limited_row_counts(capturing_console: CapturingConsole)
     assert "Limited via config" in capturing_console.text
 
 
+def failing_database(bad: str) -> AsyncMock:
+    """A database whose count_rows raises for the named table."""
+    database = AsyncMock()
+
+    async def count_rows(table: Table, **kwargs: Any) -> int:
+        if table.name == bad:
+            raise RuntimeError("boom")
+        return 1
+
+    database.count_rows.side_effect = count_rows
+    database.get_data.return_value = []
+    return database
+
+
+async def test_run_continues_when_one_table_fails(capturing_console: CapturingConsole) -> None:
+    """A failing table is reported while the remaining tables still dump."""
+    database = failing_database("bad")
+    good, bad = Table("good", []), Table("bad", [])
+    database.get_tables.return_value = [good, bad]
+    file = AsyncMock()
+    file.write_to_file.return_value = "good.sql"
+    app = make_app(make_config(), database, file, console=capturing_console.console)
+
+    with pytest.raises(SystemExit) as excinfo:
+        await app.run()
+
+    assert excinfo.value.code == 1
+    text = capturing_console.text
+    assert "Failed to dump table bad: boom" in text
+    assert "FAILED" in text
+    assert "good.sql" in text
+    assert "Failed to dump 1 of 2 tables" in text
+    database.dispose.assert_awaited_once()
+
+
+async def test_run_skips_foreign_keys_for_failed_tables() -> None:
+    """Deferred foreign keys are not written for a table that failed."""
+    database = failing_database("bad")
+    good = Table("good", [], foreign_keys=["ALTER TABLE good ADD CONSTRAINT g FOREIGN KEY (x) REFERENCES y(x);"])
+    bad = Table("bad", [], foreign_keys=["ALTER TABLE bad ADD CONSTRAINT b FOREIGN KEY (x) REFERENCES y(x);"])
+    database.get_tables.return_value = [good, bad]
+    file = AsyncMock()
+    file.write_to_file.return_value = "good.sql"
+    app = make_app(make_config(), database, file)
+
+    with pytest.raises(SystemExit):
+        await app.run()
+
+    file.write_statements.assert_awaited_once_with(good, good.foreign_keys)
+
+
+async def test_run_does_not_exit_when_all_tables_succeed() -> None:
+    """A clean run finishes without raising."""
+    database = AsyncMock()
+    database.get_tables.return_value = [Table("alpha", [])]
+    database.count_rows.return_value = 1
+    database.get_data.return_value = []
+    file = AsyncMock()
+    file.write_to_file.return_value = "alpha.sql"
+    app = make_app(make_config(), database, file)
+
+    await app.run()
+
+    database.dispose.assert_awaited_once()
+
+
 def write_config_file(tmp_path: Path, include_credentials: bool = False) -> Path:
     """Write a schema-valid config file, optionally with credentials."""
     connection: Dict[str, Any] = {"type": "pgsql", "host": "127.0.0.1", "port": 5432, "database": "test"}
