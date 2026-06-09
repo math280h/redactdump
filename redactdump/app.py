@@ -76,13 +76,6 @@ class RedactDump:
         """
         self.console.print(f":construction: [blue]Working on table:[/blue] {table.name}")
 
-        row_count = (
-            await self.database.count_rows(table)
-            if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
-            else int(self.config["limits"]["max_rows_per_table"])
-        )
-
-        last_num = 0
         step = (
             100
             if "performance" not in self.config or "rows_per_request" not in self.config["performance"]
@@ -90,14 +83,17 @@ class RedactDump:
         )
         location = None
 
-        for x in range(0, row_count, step):
-            if x == 0 and step < row_count:
-                continue
+        # One connection per table so every batch reads the same snapshot.
+        async with self.database.table_connection() as conn:
+            row_count = (
+                await self.database.count_rows(table, conn=conn)
+                if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
+                else int(self.config["limits"]["max_rows_per_table"])
+            )
 
-            limit = step if x + step < row_count else step + row_count - x
-            data = await self.database.get_data(table, last_num, limit)
-            location = await self.file.write_to_file(table, data)
-            last_num = x
+            for offset in range(0, row_count, step):
+                data = await self.database.get_data(table, offset, min(step, row_count - offset), conn=conn)
+                location = await self.file.write_to_file(table, data)
 
         if location is None and self.config["output"].get("ddl"):
             location = await self.file.write_to_file(table, [])

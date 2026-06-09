@@ -21,3 +21,4 @@ class Table:
     columns: List[TableColumn]
     ddl: Optional[str] = None
     foreign_keys: List[str] = field(default_factory=list)
+    primary_key: List[str] = field(default_factory=list)

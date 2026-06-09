@@ -100,9 +100,11 @@ class FakeEngine:
         self.execution_options_calls: List[Dict[str, Any]] = []
         self.dialect = SimpleNamespace(name=dialect_name)
         self.disposed = False
+        self.connect_calls = 0
 
     def connect(self) -> FakeConnection:
-        """Return a fresh fake connection."""
+        """Return a fresh fake connection, counting how many were opened."""
+        self.connect_calls += 1
         return FakeConnection(self)
 
     async def dispose(self) -> None:

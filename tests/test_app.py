@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import ANY, AsyncMock, MagicMock, call
 
 import pytest
 import yaml
@@ -31,9 +31,16 @@ def make_app(
     return app
 
 
+def mock_database() -> AsyncMock:
+    """An AsyncMock database whose table_connection is an async context manager."""
+    database = AsyncMock()
+    database.table_connection = MagicMock()
+    return database
+
+
 async def test_dump_paginates_with_default_step() -> None:
     """A row count above the step issues offset and limit batched reads."""
-    database = AsyncMock()
+    database = mock_database()
     database.count_rows.return_value = 250
     file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
@@ -43,12 +50,16 @@ async def test_dump_paginates_with_default_step() -> None:
     result = await app.dump(table)
 
     assert result == (table, 250, "dump.sql")
-    assert database.get_data.call_args_list == [call(table, 0, 100), call(table, 100, 150)]
+    assert database.get_data.call_args_list == [
+        call(table, 0, 100, conn=ANY),
+        call(table, 100, 100, conn=ANY),
+        call(table, 200, 50, conn=ANY),
+    ]
 
 
 async def test_dump_single_batch_below_step() -> None:
     """A small table is read in a single batch."""
-    database = AsyncMock()
+    database = mock_database()
     database.count_rows.return_value = 50
     file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
@@ -58,12 +69,29 @@ async def test_dump_single_batch_below_step() -> None:
     result = await app.dump(table)
 
     assert result == (table, 50, "dump.sql")
-    assert database.get_data.call_args_list == [call(table, 0, 150)]
+    assert database.get_data.call_args_list == [call(table, 0, 50, conn=ANY)]
+
+
+async def test_dump_uses_one_connection_for_all_batches() -> None:
+    """Every batch of a table is read over the same snapshot connection."""
+    database = mock_database()
+    database.count_rows.return_value = 250
+    file = AsyncMock()
+    file.write_to_file.return_value = "dump.sql"
+    app = make_app(make_config(), database, file)
+    table = Table("users", [])
+
+    await app.dump(table)
+
+    database.table_connection.assert_called_once_with()
+    conns = {kwargs["conn"] for (_args, kwargs) in database.get_data.call_args_list}
+    assert len(conns) == 1
+    assert database.count_rows.call_args == call(table, conn=conns.pop())
 
 
 async def test_dump_empty_table_returns_no_location() -> None:
     """An empty table performs no writes and reports no output file."""
-    database = AsyncMock()
+    database = mock_database()
     database.count_rows.return_value = 0
     file = AsyncMock()
     app = make_app(make_config(), database, file)
@@ -78,7 +106,7 @@ async def test_dump_empty_table_returns_no_location() -> None:
 
 async def test_dump_empty_table_writes_ddl_when_enabled() -> None:
     """With ddl enabled an empty table still writes its schema once."""
-    database = AsyncMock()
+    database = mock_database()
     database.count_rows.return_value = 0
     file = AsyncMock()
     file.write_to_file.return_value = "users.sql"
@@ -93,7 +121,7 @@ async def test_dump_empty_table_writes_ddl_when_enabled() -> None:
 
 async def test_dump_respects_max_rows_limit() -> None:
     """A configured max_rows_per_table overrides the live row count."""
-    database = AsyncMock()
+    database = mock_database()
     file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
     app = make_app(make_config(limits={"max_rows_per_table": 30}), database, file)
@@ -103,12 +131,12 @@ async def test_dump_respects_max_rows_limit() -> None:
 
     assert result[1] == 30
     database.count_rows.assert_not_called()
-    assert database.get_data.call_args_list == [call(table, 0, 130)]
+    assert database.get_data.call_args_list == [call(table, 0, 30, conn=ANY)]
 
 
 async def test_dump_respects_rows_per_request() -> None:
     """A configured rows_per_request changes the batch step."""
-    database = AsyncMock()
+    database = mock_database()
     database.count_rows.return_value = 25
     file = AsyncMock()
     file.write_to_file.return_value = "dump.sql"
@@ -117,12 +145,16 @@ async def test_dump_respects_rows_per_request() -> None:
 
     await app.dump(table)
 
-    assert database.get_data.call_args_list == [call(table, 0, 10), call(table, 10, 15)]
+    assert database.get_data.call_args_list == [
+        call(table, 0, 10, conn=ANY),
+        call(table, 10, 10, conn=ANY),
+        call(table, 20, 5, conn=ANY),
+    ]
 
 
 async def test_run_writes_deferred_foreign_keys() -> None:
     """After all data is dumped the table's foreign keys are written out."""
-    database = AsyncMock()
+    database = mock_database()
     table = Table(
         "orders", [], foreign_keys=['ALTER TABLE "orders" ADD CONSTRAINT "fk" FOREIGN KEY (uid) REFERENCES users(id);']
     )
@@ -138,7 +170,7 @@ async def test_run_writes_deferred_foreign_keys() -> None:
 
 async def test_run_exits_when_no_tables() -> None:
     """An empty database aborts the run."""
-    database = AsyncMock()
+    database = mock_database()
     database.get_tables.return_value = []
     app = make_app(make_config(), database, AsyncMock())
 
@@ -150,7 +182,7 @@ async def test_run_exits_when_no_tables() -> None:
 
 async def test_run_reports_each_table(capturing_console: CapturingConsole) -> None:
     """A successful run summarises every dumped table."""
-    database = AsyncMock()
+    database = mock_database()
     database.get_tables.return_value = [Table("alpha", []), Table("beta", [])]
     database.count_rows.return_value = 5
     database.get_data.return_value = []
@@ -168,7 +200,7 @@ async def test_run_reports_each_table(capturing_console: CapturingConsole) -> No
 
 async def test_run_marks_limited_row_counts(capturing_console: CapturingConsole) -> None:
     """When a row limit is configured the summary flags it."""
-    database = AsyncMock()
+    database = mock_database()
     database.get_tables.return_value = [Table("alpha", [])]
     database.get_data.return_value = []
     file = AsyncMock()
@@ -183,7 +215,7 @@ async def test_run_marks_limited_row_counts(capturing_console: CapturingConsole)
 
 def failing_database(bad: str) -> AsyncMock:
     """A database whose count_rows raises for the named table."""
-    database = AsyncMock()
+    database = mock_database()
 
     async def count_rows(table: Table, **kwargs: Any) -> int:
         if table.name == bad:
@@ -234,7 +266,7 @@ async def test_run_skips_foreign_keys_for_failed_tables() -> None:
 
 async def test_run_does_not_exit_when_all_tables_succeed() -> None:
     """A clean run finishes without raising."""
-    database = AsyncMock()
+    database = mock_database()
     database.get_tables.return_value = [Table("alpha", [])]
     database.count_rows.return_value = 1
     database.get_data.return_value = []
