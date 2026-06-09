@@ -203,7 +203,7 @@ async def test_end_to_end_dump_to_file(
     await output.write_to_file(table, rows)
 
     content = (tmp_path / "dump.sql").read_text()
-    assert content.count("INSERT INTO users") == 2
+    assert content.count('INSERT INTO "users"') == 2
     assert "Alice" in content and "Bob" in content
 
 

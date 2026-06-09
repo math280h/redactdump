@@ -264,15 +264,15 @@ _(column_1, new_column)_
 <summary>Output</summary>
 
 ```sql
-INSERT INTO table_name VALUES (890, 'Yolanda Mcdonald');
-INSERT INTO table_name VALUES (1982, 'Stephen Lewis');
-INSERT INTO table_name VALUES (2952, 'Janet Woodward');
-INSERT INTO table_name VALUES (9307, 'Joshua Price');
-INSERT INTO table_name VALUES (1, 'Tina Morrison');
-INSERT INTO table_name VALUES (1, 'Juan Mejia');
-INSERT INTO table_name VALUES (12312, 'Michael Thornton');
-INSERT INTO table_name VALUES (99, 'Adrian White');
-INSERT INTO table_name VALUES (99, 'Robin Jefferson');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (890, 'Yolanda Mcdonald');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (1982, 'Stephen Lewis');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (2952, 'Janet Woodward');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (9307, 'Joshua Price');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (1, 'Tina Morrison');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (1, 'Juan Mejia');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (12312, 'Michael Thornton');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (99, 'Adrian White');
+INSERT INTO "table_name" ("column_1", "new_column") VALUES (99, 'Robin Jefferson');
 ```
 
 </details>

@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Coroutine, Dict, List
 
 import yaml
 from sqlalchemy import create_engine, text
@@ -114,6 +114,18 @@ def build_app(config_path: Path, max_workers: int) -> RedactDump:
     return app
 
 
+def run_async(coro: Coroutine[Any, Any, None]) -> None:
+    """Run a coroutine, on a selector event loop on Windows (psycopg requirement)."""
+    if sys.platform == "win32":
+        loop = asyncio.SelectorEventLoop()
+        try:
+            loop.run_until_complete(coro)
+        finally:
+            loop.close()
+    else:
+        asyncio.run(coro)
+
+
 def measure(base_dir: Path, iterations: int, rows_per_request: int, max_workers: int) -> List[float]:
     """Time only the dump run across iterations and return the durations in seconds."""
     durations: List[float] = []
@@ -124,7 +136,7 @@ def measure(base_dir: Path, iterations: int, rows_per_request: int, max_workers:
         write_config(config_path, output_dir, rows_per_request)
         app = build_app(config_path, max_workers)
         start = time.perf_counter()
-        asyncio.run(app.run())
+        run_async(app.run())
         durations.append(time.perf_counter() - start)
     return durations
 
@@ -139,9 +151,6 @@ def main() -> None:
     parser.add_argument("--max-workers", type=int, default=int(os.environ.get("BENCH_MAX_WORKERS", "4")))
     parser.add_argument("--output", type=str, default=os.environ.get("BENCH_OUTPUT", ""))
     args = parser.parse_args()
-
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     rows_per_table = max(1, args.rows // args.tables)
     total_rows = rows_per_table * args.tables
