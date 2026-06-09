@@ -10,6 +10,7 @@ from rich.text import Text
 
 from redactdump.core.config import Config
 from redactdump.core.database import Database
+from redactdump.core.errors import RedactDumpError
 from redactdump.core.file import File
 from redactdump.core.models import Table
 
@@ -174,15 +175,21 @@ def main(
     debug: bool = typer.Option(False, "-d", "--debug", help="Enable debug mode."),
 ) -> None:
     """Create a redacted database dump."""
-    redactor = RedactDump(config, user, password, max_workers, debug)
-    if sys.platform == "win32":  # pragma: no cover
-        loop = asyncio.SelectorEventLoop()
-        try:
-            loop.run_until_complete(redactor.run())
-        finally:
-            loop.close()
-    else:  # pragma: no cover
-        asyncio.run(redactor.run())
+    try:
+        redactor = RedactDump(config, user, password, max_workers, debug)
+        if sys.platform == "win32":  # pragma: no cover
+            loop = asyncio.SelectorEventLoop()
+            try:
+                loop.run_until_complete(redactor.run())
+            finally:
+                loop.close()
+        else:  # pragma: no cover
+            asyncio.run(redactor.run())
+    except RedactDumpError as exc:
+        # Misconfigurations are user errors; report them as a clean message
+        # rather than a traceback.
+        Console().print(f"[red]ERROR:[/red] {exc}")
+        raise typer.Exit(1) from None
 
 
 def start_application() -> None:

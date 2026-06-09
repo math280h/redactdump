@@ -7,6 +7,7 @@ from sqlalchemy import table as sql_table
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from redactdump.core.errors import RedactDumpError
 from redactdump.core.models import Table, TableColumn
 from redactdump.core.redactor import Redactor
 
@@ -152,7 +153,10 @@ class Database:
             driver = self.config["connection"].get("driver") or MSSQL_DEFAULT_DRIVER
             query = {"driver": driver, "TrustServerCertificate": "yes"}
         else:
-            raise Exception("Unsupported database engine")
+            raise RedactDumpError(
+                f"Unsupported database engine '{self.config['connection']['type']}'. "
+                "Supported types: pgsql, postgresql, mysql, mssql."
+            )
 
         # URL.create escapes every component, so credentials containing
         # reserved characters (@, /, :, #) survive the round trip.

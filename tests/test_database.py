@@ -8,6 +8,7 @@ from conftest import CapturingConsole, FakeEngine, FakeRow, build_database, make
 from rich.console import Console
 
 from redactdump.core.database import Database
+from redactdump.core.errors import RedactDumpError
 from redactdump.core.models import Table, TableColumn
 
 
@@ -83,8 +84,9 @@ def test_credentials_with_reserved_characters_are_escaped() -> None:
 def test_unsupported_engine_raises() -> None:
     """An unknown database type is rejected before an engine is created."""
     with patch("redactdump.core.database.create_async_engine") as create_async_engine:
-        with pytest.raises(Exception, match="Unsupported database engine"):
+        with pytest.raises(RedactDumpError, match="Unsupported database engine 'oracle'") as excinfo:
             Database(make_config(connection_type="oracle"), Console())
+    assert "pgsql, postgresql, mysql, mssql" in str(excinfo.value)
     create_async_engine.assert_not_called()
 
 

@@ -332,6 +332,50 @@ def test_cli_requires_config() -> None:
     assert result.exit_code != 0
 
 
+def test_cli_reports_missing_config_file_cleanly(tmp_path: Path) -> None:
+    """A nonexistent config path exits with a message, not a traceback."""
+    result = CliRunner().invoke(cli, ["-c", str(tmp_path / "nope.yaml"), "-u", "bob", "-p", "pw"])
+
+    assert result.exit_code == 1
+    assert "Config file not found" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_reports_invalid_config_cleanly(tmp_path: Path) -> None:
+    """A schema violation exits with the failing key, not a traceback."""
+    data = {
+        "connection": {"type": "pgsql", "host": "127.0.0.1", "port": 5432, "database": "test"},
+        "redact": {"patterns": {"data": []}},
+        "output": {"type": "stdout", "location": "out"},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data))
+
+    result = CliRunner().invoke(cli, ["-c", str(path), "-u", "bob", "-p", "pw"])
+
+    assert result.exit_code == 1
+    assert "ERROR" in result.output
+    assert "output.type" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_reports_unsupported_engine_cleanly(tmp_path: Path) -> None:
+    """An unknown connection.type exits with the supported engines listed."""
+    data = {
+        "connection": {"type": "oracle", "host": "127.0.0.1", "port": 5432, "database": "test"},
+        "redact": {"patterns": {"data": []}},
+        "output": {"type": "file", "location": str(tmp_path / "dump")},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data))
+
+    result = CliRunner().invoke(cli, ["-c", str(path), "-u", "bob", "-p", "pw"])
+
+    assert result.exit_code == 1
+    assert "Unsupported database engine 'oracle'" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_start_application_invokes_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     """The entry point delegates to the typer app."""
     called = {"value": False}

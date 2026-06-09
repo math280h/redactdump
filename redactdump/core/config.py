@@ -1,7 +1,9 @@
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from redactdump.core.errors import RedactDumpError
 
 
 class StrictModel(BaseModel):
@@ -106,15 +108,28 @@ class Config:
         """Load and validate config.
 
         Raises:
-            ValidationError: If config is invalid.
+            RedactDumpError: If the file is missing, is not valid YAML or
+                fails schema validation.
 
         Returns:
             dict: Config dictionary
         """
-        with open(self.config_file, "r") as f:
-            config = yaml.safe_load(f)
+        try:
+            with open(self.config_file, "r") as f:
+                config = yaml.safe_load(f)
+        except FileNotFoundError:
+            raise RedactDumpError(f"Config file not found: {self.config_file}") from None
+        except yaml.YAMLError as exc:
+            raise RedactDumpError(f"Config file is not valid YAML: {self.config_file}\n{exc}") from None
 
-        RedactDumpConfig.model_validate(config)
+        try:
+            RedactDumpConfig.model_validate(config)
+        except ValidationError as exc:
+            issues = "\n".join(
+                f"  {'.'.join(str(part) for part in error['loc']) or '(root)'}: {error['msg']}"
+                for error in exc.errors()
+            )
+            raise RedactDumpError(f"Invalid configuration in {self.config_file}:\n{issues}") from None
 
         if "debug" not in config or "enabled" not in config["debug"]:
             config["debug"] = {"enabled": False}
