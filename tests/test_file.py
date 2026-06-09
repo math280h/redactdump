@@ -38,7 +38,7 @@ async def test_single_file_output(tmp_path: Path) -> None:
 
     content = (tmp_path / "dump.sql").read_text()
     assert name == "dump.sql"
-    assert content == 'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
+    assert content == 'INSERT INTO "users" ("id", "name") VALUES (1, \'Alice\');\n'
 
 
 def test_single_file_truncated_on_init(tmp_path: Path) -> None:
@@ -119,7 +119,7 @@ async def test_write_to_file_emits_cast_in_insert(tmp_path: Path) -> None:
     await file.write_to_file(Table("hosts", []), [row])
 
     content = (tmp_path / "dump.sql").read_text()
-    assert content == "INSERT INTO hosts (\"ip\") VALUES ('192.168.0.1'::inet);\n"
+    assert content == 'INSERT INTO "hosts" ("ip") VALUES (\'192.168.0.1\'::inet);\n'
 
 
 def test_resolve_file_path_drops_table_name_cleanly() -> None:
@@ -142,7 +142,7 @@ async def test_single_file_concurrent_writes(tmp_path: Path) -> None:
 
     lines = (tmp_path / "dump.sql").read_text().splitlines()
     assert len(lines) == 200
-    assert all(line.startswith("INSERT INTO events") and line.endswith(");") for line in lines)
+    assert all(line.startswith('INSERT INTO "events"') and line.endswith(");") for line in lines)
 
 
 def build_multi_config(location: object, naming: Optional[str] = None) -> dict:
@@ -162,7 +162,7 @@ async def test_multi_file_output_default_name(tmp_path: Path) -> None:
 
     assert name is not None
     assert name.startswith("users-") and name.endswith(".sql")
-    assert (outdir / name).read_text() == 'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
+    assert (outdir / name).read_text() == 'INSERT INTO "users" ("id", "name") VALUES (1, \'Alice\');\n'
 
 
 async def test_multi_file_output_named_template(tmp_path: Path) -> None:
@@ -216,14 +216,23 @@ def test_insert_statement_quotes_columns_and_values() -> None:
         TableColumn("name", "character varying", True, "", "Bob"),
     ]
     statement = File.insert_statement(Table("users", []), row)
-    assert statement == 'INSERT INTO users ("id", "name") VALUES (1, \'Bob\');'
+    assert statement == 'INSERT INTO "users" ("id", "name") VALUES (1, \'Bob\');'
+
+
+def test_insert_statement_quotes_reserved_table_name() -> None:
+    """A reserved-word or mixed-case table name is quoted for every dialect."""
+    row = [TableColumn("id", "integer", False, "", 1)]
+    table = Table("Order", [])
+    assert File.insert_statement(table, row) == 'INSERT INTO "Order" ("id") VALUES (1);'
+    assert File.insert_statement(table, row, "mysql") == "INSERT INTO `Order` (`id`) VALUES (1);"
+    assert File.insert_statement(table, row, "mssql") == "INSERT INTO [Order] ([id]) VALUES (1);"
 
 
 def test_insert_statement_uses_mysql_quoting() -> None:
     """The mysql dialect produces backtick-quoted identifiers."""
     row = [TableColumn("id", "integer", False, "", 1)]
     statement = File.insert_statement(Table("users", []), row, "mysql")
-    assert statement == "INSERT INTO users (`id`) VALUES (1);"
+    assert statement == "INSERT INTO `users` (`id`) VALUES (1);"
 
 
 async def test_mysql_connection_quotes_inserts_with_backticks(tmp_path: Path) -> None:
@@ -238,14 +247,14 @@ async def test_mysql_connection_quotes_inserts_with_backticks(tmp_path: Path) ->
     await file.write_to_file(Table("users", []), sample_rows())
 
     content = (tmp_path / "dump.sql").read_text()
-    assert content == "INSERT INTO users (`id`, `name`) VALUES (1, 'Alice');\n"
+    assert content == "INSERT INTO `users` (`id`, `name`) VALUES (1, 'Alice');\n"
 
 
 def test_insert_statement_uses_mssql_quoting() -> None:
     """The mssql dialect produces bracket-quoted identifiers."""
     row = [TableColumn("id", "int", False, "", 1)]
     statement = File.insert_statement(Table("users", []), row, "mssql")
-    assert statement == "INSERT INTO users ([id]) VALUES (1);"
+    assert statement == "INSERT INTO [users] ([id]) VALUES (1);"
 
 
 async def test_mssql_connection_quotes_inserts_with_brackets(tmp_path: Path) -> None:
@@ -260,7 +269,7 @@ async def test_mssql_connection_quotes_inserts_with_brackets(tmp_path: Path) -> 
     await file.write_to_file(Table("users", []), sample_rows())
 
     content = (tmp_path / "dump.sql").read_text()
-    assert content == "INSERT INTO users ([id], [name]) VALUES (1, N'Alice');\n"
+    assert content == "INSERT INTO [users] ([id], [name]) VALUES (1, N'Alice');\n"
 
 
 def test_format_value_mssql_numeric_is_unquoted() -> None:
@@ -436,8 +445,8 @@ async def test_single_file_prepends_ddl_once(tmp_path: Path) -> None:
     assert content.startswith(USERS_DDL + "\n\n")
     _, _, inserts = content.partition("\n\n")
     assert inserts == (
-        'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
-        'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
+        'INSERT INTO "users" ("id", "name") VALUES (1, \'Alice\');\n'
+        'INSERT INTO "users" ("id", "name") VALUES (1, \'Alice\');\n'
     )
 
 
@@ -450,7 +459,7 @@ async def test_multi_file_includes_ddl(tmp_path: Path) -> None:
 
     content = (outdir / "users.sql").read_text()
     assert content.startswith(USERS_DDL + "\n\n")
-    assert content.endswith('INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n')
+    assert content.endswith('INSERT INTO "users" ("id", "name") VALUES (1, \'Alice\');\n')
 
 
 async def test_ddl_only_payload_for_empty_rows(tmp_path: Path) -> None:
@@ -471,7 +480,7 @@ async def test_write_statements_appends_to_single_file(tmp_path: Path) -> None:
 
     content = (tmp_path / "dump.sql").read_text()
     assert content.endswith(fk + "\n")
-    assert content.index("INSERT INTO orders") < content.index("ALTER TABLE")
+    assert content.index('INSERT INTO "orders"') < content.index("ALTER TABLE")
 
 
 async def test_write_statements_empty_is_noop(tmp_path: Path) -> None:
