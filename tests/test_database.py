@@ -286,6 +286,29 @@ async def test_get_data_redaction_dispatch_uses_redactor() -> None:
     assert spy.called
 
 
+async def test_get_data_applies_named_column_rules_for_table() -> None:
+    """A redact.columns entry redacts the named column of its table."""
+    columns = {"users": [{"name": "email", "replacement": "email"}]}
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "real@x.com"}]})
+    database = build_database(make_config(columns=columns), engine)
+
+    rows = await database.get_data(passthrough_table(), 0, 100)
+    values = {column.name: column.value for column in rows[0]}
+    assert values["id"] == 1
+    assert values["email"] != "real@x.com"
+
+
+async def test_get_data_named_column_rules_skip_other_tables() -> None:
+    """A redact.columns entry for another table leaves this table untouched."""
+    columns = {"accounts": [{"name": "email", "replacement": "email"}]}
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "real@x.com"}]})
+    database = build_database(make_config(columns=columns), engine)
+
+    rows = await database.get_data(passthrough_table(), 0, 100)
+    values = {column.name: column.value for column in rows[0]}
+    assert values["email"] == "real@x.com"
+
+
 def ddl_config() -> Dict[str, Any]:
     """A config with DDL output enabled."""
     return make_config(output={"type": "file", "location": "out", "ddl": True})

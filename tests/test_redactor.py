@@ -1,6 +1,6 @@
 """Tests for the Redactor rule loading and redaction behaviour."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -241,3 +241,68 @@ def test_redact_returns_same_column_objects() -> None:
     cols = columns(("note", None))
     result = red.redact({"note": "x"}, cols)
     assert result is cols
+
+
+def table_redactor(table_columns: Dict[str, Any], patterns: Optional[Dict[str, Any]] = None) -> Redactor:
+    """Build a Redactor from a redact.columns mapping."""
+    return Redactor({"redact": {"patterns": patterns or {}, "columns": table_columns}})
+
+
+def test_named_column_rules_load_per_table() -> None:
+    """redact.columns entries become rules scoped to their table."""
+    red = table_redactor({"users": [{"name": "email", "replacement": "email"}]})
+    assert len(red.table_rules["users"]) == 1
+    assert red.data_rules == []
+    assert red.column_rules == []
+
+
+def test_named_column_rule_redacts_matching_table() -> None:
+    """A named column is replaced when the row belongs to the configured table."""
+    red = table_redactor({"users": [{"name": "email", "replacement": "email"}]})
+    result = red.redact({"email": "real@example.com"}, columns(("email", None)), "users")
+    assert result[0].value != "real@example.com"
+    assert "@" in result[0].value
+
+
+def test_named_column_rule_ignores_other_tables() -> None:
+    """A named column rule does not apply to rows from other tables."""
+    red = table_redactor({"users": [{"name": "email", "replacement": "email"}]})
+    result = red.redact({"email": "real@example.com"}, columns(("email", None)), "orders")
+    assert result[0].value == "real@example.com"
+
+
+def test_named_column_rule_ignores_rows_without_table() -> None:
+    """Without a table name the named column rules are not consulted."""
+    red = table_redactor({"users": [{"name": "email", "replacement": "email"}]})
+    result = red.redact({"email": "real@example.com"}, columns(("email", None)))
+    assert result[0].value == "real@example.com"
+
+
+def test_named_column_rule_matches_exact_name_only() -> None:
+    """The configured name is an exact match, not a pattern."""
+    red = table_redactor({"users": [{"name": "email", "replacement": "email"}]})
+    result = red.redact({"email_backup": "real@example.com"}, columns(("email_backup", None)), "users")
+    assert result[0].value == "real@example.com"
+
+
+def test_named_column_rule_takes_precedence_over_patterns() -> None:
+    """A column redacted by a named rule is not touched by pattern rules."""
+    red = table_redactor(
+        {"users": [{"name": "age", "replacement": None}]},
+        {"column": [{"pattern": "^age$", "replacement": "name"}]},
+    )
+    result = red.redact({"age": 42}, columns(("age", None)), "users")
+    assert result[0].value == "NULL"
+
+
+def test_named_column_invalid_replacement_exits() -> None:
+    """An unknown faker provider in redact.columns aborts rule loading."""
+    with pytest.raises(SystemExit):
+        table_redactor({"users": [{"name": "email", "replacement": "definitely_not_a_provider"}]})
+
+
+def test_named_column_null_replacement_becomes_null() -> None:
+    """A null replacement in redact.columns maps the value to NULL."""
+    red = table_redactor({"users": [{"name": "ssn", "replacement": None}]})
+    result = red.redact({"ssn": "123-45-6789"}, columns(("ssn", None)), "users")
+    assert result[0].value == "NULL"

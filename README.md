@@ -107,6 +107,23 @@ redact:
             import: myapp.models.Status
 ````
 
+#### Named columns per table
+
+`redact.columns` redacts specific columns of specific tables, without pattern
+matching. Each entry names the column (exact match) and the replacement to
+use; a `null` replacement writes `NULL`. These rules apply only to the named
+table and take precedence over `redact.patterns` rules for the same column:
+
+````yaml
+redact:
+  columns:
+    users:
+      - name: email
+        replacement: email
+      - name: ssn
+        replacement: null
+````
+
 #### Community providers
 
 faker's [community providers](https://faker.readthedocs.io/en/stable/communityproviders.html)
