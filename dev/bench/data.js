@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781031929237,
+  "lastUpdate": 1781033827680,
   "repoUrl": "https://github.com/math280h/redactdump",
   "entries": {
     "redactdump": [
@@ -180,6 +180,36 @@ window.BENCHMARK_DATA = {
             "value": 4550.76,
             "unit": "rows/sec",
             "extra": "rows=50000 tables=4 iterations=5 median=10.987s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "1547127+math280h@users.noreply.github.com",
+            "name": "Mathias V. Nielsen",
+            "username": "math280h"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad8b5f3505d981210065ebb7b22a81ed4cb17e38",
+          "message": "fix: multi file splitting (#62)",
+          "timestamp": "2026-06-09T15:35:25-04:00",
+          "tree_id": "d4e43cca74bc0cdbe2e31800f1c5bda64ce30e34",
+          "url": "https://github.com/math280h/redactdump/commit/ad8b5f3505d981210065ebb7b22a81ed4cb17e38"
+        },
+        "date": 1781033827303,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PostgreSQL dump throughput",
+            "value": 3886.81,
+            "unit": "rows/sec",
+            "extra": "rows=50000 tables=4 iterations=5 median=12.864s"
           }
         ]
       }
