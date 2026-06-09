@@ -1,8 +1,8 @@
-"""Integration tests that run against a live PostgreSQL or MySQL database.
+"""Integration tests that run against a live PostgreSQL, MySQL or SQL Server database.
 
-These are skipped unless INTEGRATION_DB is set to "postgresql" or "mysql".
-The matching service is provided by docker-compose locally and by GitHub
-Actions service containers in CI. Connection details come from the
+These are skipped unless INTEGRATION_DB is set to "postgresql", "mysql" or
+"mssql". The matching service is provided by docker-compose locally and by
+GitHub Actions service containers in CI. Connection details come from the
 INTEGRATION_* environment variables.
 """
 
@@ -28,23 +28,45 @@ INTEGRATION_DB = os.environ.get("INTEGRATION_DB", "")
 if not INTEGRATION_DB:
     pytest.skip("INTEGRATION_DB not set", allow_module_level=True)
 
-DEFAULT_PORTS = {"postgresql": 5432, "pgsql": 5432, "mysql": 3306}
-DRIVER_URLS = {"postgresql": "postgresql+psycopg", "pgsql": "postgresql+psycopg", "mysql": "mysql+pymysql"}
-CONNECTION_TYPES = {"postgresql": "pgsql", "pgsql": "pgsql", "mysql": "mysql"}
+DEFAULT_PORTS = {"postgresql": 5432, "pgsql": 5432, "mysql": 3306, "mssql": 1433}
+DRIVER_URLS = {
+    "postgresql": "postgresql+psycopg",
+    "pgsql": "postgresql+psycopg",
+    "mysql": "mysql+pymysql",
+    "mssql": "mssql+pyodbc",
+}
+CONNECTION_TYPES = {"postgresql": "pgsql", "pgsql": "pgsql", "mysql": "mysql", "mssql": "mssql"}
 
 if INTEGRATION_DB not in DRIVER_URLS:
     raise ValueError(f"Unsupported INTEGRATION_DB: {INTEGRATION_DB}")
 
+IS_MSSQL = INTEGRATION_DB == "mssql"
+
 HOST = os.environ.get("INTEGRATION_HOST", "127.0.0.1")
 PORT = int(os.environ.get("INTEGRATION_PORT", str(DEFAULT_PORTS[INTEGRATION_DB])))
-USER = os.environ.get("INTEGRATION_USER", "test")
-PASSWORD = os.environ.get("INTEGRATION_PASSWORD", "secret")
+USER = os.environ.get("INTEGRATION_USER", "sa" if IS_MSSQL else "test")
+PASSWORD = os.environ.get("INTEGRATION_PASSWORD", "RedactSecret123" if IS_MSSQL else "secret")
 DATABASE = os.environ.get("INTEGRATION_DATABASE", "test")
 
+MSSQL_QUERY = "?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
 
-def connection_url() -> str:
+
+def connection_url(database: Optional[str] = None) -> str:
     """Build the synchronous SQLAlchemy URL used for schema setup and teardown."""
-    return f"{DRIVER_URLS[INTEGRATION_DB]}://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}"
+    url = f"{DRIVER_URLS[INTEGRATION_DB]}://{USER}:{PASSWORD}@{HOST}:{PORT}/{database or DATABASE}"
+    if IS_MSSQL:
+        url += MSSQL_QUERY
+    return url
+
+
+def ensure_mssql_database() -> None:
+    """Create the test database; SQL Server containers start with none."""
+    engine = create_engine(connection_url("master"), isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(f"IF DB_ID('{DATABASE}') IS NULL CREATE DATABASE [{DATABASE}]"))
+    finally:
+        engine.dispose()
 
 
 def build_config(
@@ -76,6 +98,8 @@ def build_config(
 @pytest.fixture(scope="module")
 def setup_engine() -> Iterator[Engine]:
     """Provide a raw synchronous engine for schema setup and teardown."""
+    if IS_MSSQL:
+        ensure_mssql_database()
     engine = create_engine(connection_url())
     yield engine
     engine.dispose()
@@ -308,12 +332,16 @@ async def test_dialect_specific_types_round_trip(
     missing escape or a Python-repr of a value corrupts the data here rather than
     silently in a real dump.
     """
-    is_pg = CONNECTION_TYPES[INTEGRATION_DB] == "pgsql"
-    columns = "id INTEGER NOT NULL PRIMARY KEY, flag BOOLEAN, payload {blob}, txt TEXT, ts {ts}, j {json}".format(
-        blob="BYTEA" if is_pg else "BLOB",
-        ts="TIMESTAMP" if is_pg else "DATETIME",
-        json="JSONB" if is_pg else "JSON",
-    )
+    dialect = CONNECTION_TYPES[INTEGRATION_DB]
+    is_pg = dialect == "pgsql"
+    is_mysql = dialect == "mysql"
+    if is_pg:
+        blob, ts, json_type, bool_type = "BYTEA", "TIMESTAMP", "JSONB", "BOOLEAN"
+    elif is_mysql:
+        blob, ts, json_type, bool_type = "BLOB", "DATETIME", "JSON", "BOOLEAN"
+    else:
+        blob, ts, json_type, bool_type = "VARBINARY(100)", "DATETIME2", "NVARCHAR(MAX)", "BIT"
+    columns = f"id INTEGER NOT NULL PRIMARY KEY, flag {bool_type}, payload {blob}, txt TEXT, ts {ts}, j {json_type}"
     params: Dict[str, Any] = {
         "id": 1,
         "flag": True,
@@ -329,7 +357,7 @@ async def test_dialect_specific_types_round_trip(
         names += ", arr, tarr"
         binds += ", :arr, :tarr"
         params |= {"arr": [1, 2, 3], "tarr": ["x", "y"]}
-    else:
+    elif is_mysql:
         columns += ", bits BIT(8)"
         names += ", bits"
         binds += ", :bits"
@@ -371,7 +399,7 @@ async def test_dialect_specific_types_round_trip(
         if is_pg:
             assert value_of(row, "arr") == [1, 2, 3]
             assert value_of(row, "tarr") == ["x", "y"]
-        else:
+        elif is_mysql:
             assert int.from_bytes(bytes(value_of(row, "bits")), "big") == 10
     finally:
         with setup_engine.begin() as conn:
@@ -429,6 +457,74 @@ async def test_postgres_indexes_and_foreign_keys_round_trip(
         with setup_engine.connect() as conn:
             index = conn.execute(
                 text("SELECT 1 FROM pg_indexes WHERE tablename = 'node' AND indexname = 'node_label_idx'")
+            ).first()
+            assert index is not None
+
+        with pytest.raises(IntegrityError):
+            with setup_engine.begin() as conn:
+                conn.execute(text("INSERT INTO node (id, parent_id, label) VALUES (3, 999, 'x')"))
+
+        reloaded = make_database()
+        restored = {
+            value_of(row, "id"): value_of(row, "parent_id")
+            for row in await reloaded.get_data(await find_table(reloaded, "node"), 0, 10)
+        }
+        assert restored == {1: 2, 2: None}
+    finally:
+        with setup_engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS node"))
+
+
+async def test_mssql_indexes_and_foreign_keys_round_trip(
+    make_database: Callable[..., Database], setup_engine: Engine, tmp_path: Path
+) -> None:
+    """SQL Server secondary indexes and foreign keys are reconstructed and replay.
+
+    The SQL Server twin of the PostgreSQL test above: a secondary index and a
+    self-referential foreign key (with a row referencing another row) survive a
+    dump, replay, and are enforced on the rebuilt table.
+    """
+    if not IS_MSSQL:
+        pytest.skip("this index and foreign key reconstruction test is SQL Server-specific")
+
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS node"))
+        conn.execute(
+            text(
+                "CREATE TABLE node (id INTEGER NOT NULL PRIMARY KEY, parent_id INTEGER, label VARCHAR(50), "
+                "CONSTRAINT node_parent_fk FOREIGN KEY (parent_id) REFERENCES node(id))"
+            )
+        )
+        conn.execute(text("CREATE INDEX node_label_idx ON node (label)"))
+        conn.execute(text("INSERT INTO node (id, parent_id, label) VALUES (1, 2, 'a'), (2, NULL, 'b')"))
+    try:
+        database = make_database(ddl=True)
+        table = await find_table(database, "node")
+        assert table.ddl is not None and "CREATE INDEX [node_label_idx] ON [node] ([label]);" in table.ddl
+        assert table.foreign_keys == [
+            "ALTER TABLE [node] ADD CONSTRAINT [node_parent_fk] FOREIGN KEY ([parent_id]) REFERENCES [node] ([id]);"
+        ]
+
+        rows = await database.get_data(table, 0, 10)
+        file_config = {
+            "connection": {"type": "mssql"},
+            "debug": {"enabled": False},
+            "output": {"type": "file", "location": str(tmp_path / "dump")},
+        }
+        output = File(file_config, Console())
+        await output.write_to_file(table, rows)
+        await output.write_statements(table, table.foreign_keys)
+        dump_sql = (tmp_path / "dump.sql").read_text()
+
+        with setup_engine.begin() as conn:
+            conn.execute(text("DROP TABLE node"))
+            for statement in (chunk.strip() for chunk in dump_sql.split(";")):
+                if statement:
+                    conn.execute(text(statement))
+
+        with setup_engine.connect() as conn:
+            index = conn.execute(
+                text("SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('node') AND name = 'node_label_idx'")
             ).first()
             assert index is not None
 

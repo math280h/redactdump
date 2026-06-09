@@ -83,6 +83,7 @@ class FakeEngine:
         create_statements: Optional[Dict[str, str]] = None,
         ddl_indexes: Optional[Dict[str, List[str]]] = None,
         foreign_keys: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        index_rows: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     ) -> None:
         self.schema = schema or {}
         self.data = data or {}
@@ -92,6 +93,7 @@ class FakeEngine:
         self.create_statements = create_statements or {}
         self.ddl_indexes = ddl_indexes or {}
         self.foreign_keys = foreign_keys or {}
+        self.index_rows = index_rows or {}
         self.executed: List[Any] = []
         self.execution_options_calls: List[Dict[str, Any]] = []
         self.dialect = SimpleNamespace(name=dialect_name)
@@ -107,6 +109,18 @@ class FakeEngine:
 
     def resolve(self, sql: str, params: Optional[Dict[str, Any]]) -> List[FakeRow]:
         """Return rows for a statement based on its SQL text."""
+        if "CHARACTER_MAXIMUM_LENGTH" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow(column) for column in self.ddl_columns.get(table_name, [])]
+        if "KEY_COLUMN_USAGE" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow({"name": name}) for name in self.primary_keys.get(table_name, [])]
+        if "sys.indexes" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow(row) for row in self.index_rows.get(table_name, [])]
+        if "sys.foreign_keys" in sql:
+            table_name = (params or {}).get("table", "")
+            return [FakeRow(foreign_key) for foreign_key in self.foreign_keys.get(table_name, [])]
         if "information_schema.tables" in sql:
             return [FakeRow({"table_name": name}) for name in self.schema]
         if "information_schema.columns" in sql:

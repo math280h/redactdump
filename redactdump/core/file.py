@@ -56,6 +56,26 @@ MYSQL_NUMERIC_TYPES = frozenset(
 )
 JSON_TYPES = frozenset({"json", "jsonb"})
 
+# SQL Server type names from INFORMATION_SCHEMA, consulted (like the MySQL
+# set) only when a numeric column carries a string value.
+MSSQL_NUMERIC_TYPES = frozenset(
+    {
+        "tinyint",
+        "smallint",
+        "int",
+        "bigint",
+        "decimal",
+        "numeric",
+        "money",
+        "smallmoney",
+        "float",
+        "real",
+        "bit",
+    }
+)
+
+DIALECTS = {"mysql": "mysql", "mssql": "mssql"}
+
 
 class File:
     """File class."""
@@ -74,7 +94,7 @@ class File:
         output = self.config["output"]
         self.file_path: Optional[str] = self.resolve_file_path(output) if output["type"] == "file" else None
         self.ddl_written: Set[str] = set()
-        self.dialect: str = "mysql" if self.config.get("connection", {}).get("type") == "mysql" else "postgresql"
+        self.dialect: str = DIALECTS.get(self.config.get("connection", {}).get("type"), "postgresql")
 
         self.create_output_locations()
 
@@ -154,7 +174,7 @@ class File:
 
         Args:
             column (TableColumn): Column with its value and data type.
-            dialect (str): "postgresql" or "mysql".
+            dialect (str): "postgresql", "mysql" or "mssql".
 
         Returns:
             str: The SQL literal.
@@ -165,6 +185,8 @@ class File:
             return "NULL"
         if dialect == "mysql":
             return File._format_value_mysql(value, data_type)
+        if dialect == "mssql":
+            return File._format_value_mssql(value, data_type)
         return File._format_value_postgres(value, data_type)
 
     @staticmethod
@@ -241,6 +263,26 @@ class File:
         literal = text.replace("\\", "\\\\").replace("'", "''")
         return f"'{literal}'"
 
+    @staticmethod
+    def _format_value_mssql(value: object, data_type: str) -> str:
+        """Render a value as a SQL Server literal, driven by the Python type.
+
+        Booleans (bit) become 1/0, numbers are unquoted, binary becomes a 0x..
+        hex literal and strings become N'..' literals (Unicode-safe for any
+        column type) where only single quotes need doubling.
+        """
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (int, float, Decimal)):
+            return str(value)
+        if data_type in MSSQL_NUMERIC_TYPES:
+            return str(value)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return f"0x{bytes(value).hex()}"
+        text = json.dumps(value) if isinstance(value, dict) else str(value)
+        literal = text.replace("'", "''")
+        return f"N'{literal}'"
+
     def build_payload(self, table: Table, rows: List[List[TableColumn]]) -> str:
         """Render the text to append for a batch, prefixed with DDL once per table.
 
@@ -264,20 +306,26 @@ class File:
     def insert_statement(table: Table, row: List[TableColumn], dialect: str = "postgresql") -> str:
         """Build an INSERT statement for a single row.
 
-        Identifiers are quoted for the dialect (" for PostgreSQL, ` for MySQL) and
-        values are rendered as dialect-appropriate literals.
+        Identifiers are quoted for the dialect (" for PostgreSQL, ` for MySQL,
+        [] for SQL Server) and values are rendered as dialect-appropriate
+        literals.
 
         Args:
             table (Table): Table.
             row (List[TableColumn]): Columns of the row.
-            dialect (str): "postgresql" or "mysql".
+            dialect (str): "postgresql", "mysql" or "mssql".
 
         Returns:
             str: The INSERT statement.
         """
-        quote = "`" if dialect == "mysql" else '"'
+        if dialect == "mysql":
+            opening, closing = "`", "`"
+        elif dialect == "mssql":
+            opening, closing = "[", "]"
+        else:
+            opening, closing = '"', '"'
         values = [File.format_value(column, dialect) for column in row]
-        columns = ", ".join(f"{quote}{column.name}{quote}" for column in row)
+        columns = ", ".join(f"{opening}{column.name}{closing}" for column in row)
         return f"INSERT INTO {table.name} ({columns}) VALUES ({', '.join(values)});"
 
     async def write_to_file(self, table: Table, rows: List[List[TableColumn]]) -> Union[str, None]:

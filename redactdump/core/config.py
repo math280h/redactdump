@@ -19,6 +19,7 @@ class ConnectionConfig(StrictModel):
     database: str
     username: Optional[str] = None
     password: Optional[str] = None
+    driver: Optional[str] = None
 
 
 class LimitsConfig(StrictModel):

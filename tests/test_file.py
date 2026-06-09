@@ -241,6 +241,63 @@ async def test_mysql_connection_quotes_inserts_with_backticks(tmp_path: Path) ->
     assert content == "INSERT INTO users (`id`, `name`) VALUES (1, 'Alice');\n"
 
 
+def test_insert_statement_uses_mssql_quoting() -> None:
+    """The mssql dialect produces bracket-quoted identifiers."""
+    row = [TableColumn("id", "int", False, "", 1)]
+    statement = File.insert_statement(Table("users", []), row, "mssql")
+    assert statement == "INSERT INTO users ([id]) VALUES (1);"
+
+
+async def test_mssql_connection_quotes_inserts_with_brackets(tmp_path: Path) -> None:
+    """An mssql connection makes write_to_file emit bracket-quoted identifiers."""
+    config = {
+        "connection": {"type": "mssql"},
+        "debug": {"enabled": False},
+        "output": {"type": "file", "location": str(tmp_path / "dump")},
+    }
+    file = File(config, Console())
+    assert file.dialect == "mssql"
+    await file.write_to_file(Table("users", []), sample_rows())
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert content == "INSERT INTO users ([id], [name]) VALUES (1, N'Alice');\n"
+
+
+def test_format_value_mssql_numeric_is_unquoted() -> None:
+    """SQL Server numeric type names render unquoted."""
+    assert File.format_value(column("int", 5), "mssql") == "5"
+    assert File.format_value(column("decimal", "1.50"), "mssql") == "1.50"
+    assert File.format_value(column("money", "10.00"), "mssql") == "10.00"
+
+
+def test_format_value_mssql_boolean_is_integer() -> None:
+    """Booleans (bit values) render as 1/0 on SQL Server."""
+    assert File.format_value(column("bit", True), "mssql") == "1"
+    assert File.format_value(column("bit", False), "mssql") == "0"
+
+
+def test_format_value_mssql_binary_is_hex_literal() -> None:
+    """SQL Server binary types render as a 0x.. hex literal."""
+    assert File.format_value(column("varbinary", b"\xde\xad\xbe\xef"), "mssql") == "0xdeadbeef"
+    assert File.format_value(column("varbinary", memoryview(b"\x01\x02")), "mssql") == "0x0102"
+
+
+def test_format_value_mssql_string_is_unicode_literal() -> None:
+    """Strings become N'..' literals with quotes doubled and backslashes kept."""
+    assert File.format_value(column("nvarchar", "O'Brien"), "mssql") == "N'O''Brien'"
+    assert File.format_value(column("nvarchar", "a\\b"), "mssql") == "N'a\\b'"
+
+
+def test_format_value_mssql_json_dict_is_serialised() -> None:
+    """A dict value is serialised to JSON text and quoted on SQL Server."""
+    assert File.format_value(column("nvarchar", {"a": 1}), "mssql") == "N'{\"a\": 1}'"
+
+
+def test_format_value_mssql_none_is_null() -> None:
+    """A None value is NULL under the mssql dialect too."""
+    assert File.format_value(column("varbinary", None), "mssql") == "NULL"
+
+
 def test_format_value_mysql_numeric_is_unquoted() -> None:
     """MySQL numeric type names render unquoted."""
     assert File.format_value(column("int", 5), "mysql") == "5"

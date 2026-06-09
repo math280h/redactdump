@@ -12,6 +12,7 @@ Easily create database dumps with support for redacting data (And replacing that
 **Supported databases**
 * MySQL
 * PostgreSQL
+* Microsoft SQL Server
 
 _More coming soon..._
 
@@ -123,6 +124,19 @@ redact:
         replacement: vehicle_make
 ````
 
+### Connection types
+
+`connection.type` selects the database engine:
+
+* `pgsql` (or `postgresql`): PostgreSQL via `psycopg`.
+* `mysql`: MySQL via `aiomysql`.
+* `mssql`: Microsoft SQL Server via `aioodbc`. This requires the
+  [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server)
+  to be installed; a different installed driver can be selected with
+  `connection.driver`. The server's TLS certificate is trusted implicitly
+  (`TrustServerCertificate=yes`), matching the self-signed certificate SQL
+  Server ships with.
+
 ### Example configuration:
 ````yaml
 connection:
@@ -169,6 +183,12 @@ produced by the database itself and is dialect-aware:
   primary key (in column order) and secondary indexes. Foreign keys are emitted
   as `ALTER TABLE ... ADD CONSTRAINT` statements at the very end of the dump, so
   referenced tables and rows already exist when they are applied.
+* **SQL Server** is reconstructed the same way from `INFORMATION_SCHEMA` and
+  the `sys` catalog: exact types (`nvarchar(255)`, `nvarchar(max)`,
+  `decimal(10,2)`, `datetime2(7)`, ...), `NOT NULL`, column defaults, the
+  primary key, secondary indexes and deferred foreign keys. Identity
+  properties are not reproduced, so the dumped rows replay without
+  `SET IDENTITY_INSERT`.
 
 The DDL is written once per table (empty tables still get their schema).
 
@@ -274,6 +294,9 @@ literals rather than a quoted Python representation.
   (`blob`, `varbinary`, ...) is an `X'..'` hex literal; `BIT` is its integer
   value; and backslashes in strings are escaped (MySQL treats them as escape
   characters).
+* **SQL Server**: identifiers are bracket-quoted (`[name]`); `bit` values are
+  `1`/`0`; binary (`varbinary`, ...) is a `0x..` hex literal; and strings are
+  Unicode `N'..'` literals where only single quotes need doubling.
 
 Redacting one of the dialect-specific types requires a replacement that produces
 a value valid for the type.
@@ -282,7 +305,8 @@ a value valid for the type.
 
 redactdump runs on an asyncio pipeline. Tables are dumped concurrently (bounded
 by `--max-workers`) using async database drivers (`psycopg` for PostgreSQL,
-`aiomysql` for MySQL) and async file writes via `aiofiles`.
+`aiomysql` for MySQL, `aioodbc` for SQL Server) and async file writes via
+`aiofiles`.
 
 ### Benchmark
 

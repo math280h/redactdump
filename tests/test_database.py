@@ -4,7 +4,7 @@ from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import CapturingConsole, FakeEngine, build_database, make_config
+from conftest import CapturingConsole, FakeEngine, FakeRow, build_database, make_config
 from rich.console import Console
 
 from redactdump.core.database import Database
@@ -41,6 +41,23 @@ def test_mysql_engine_url() -> None:
     """A mysql connection builds an aiomysql URL."""
     create_async_engine = make_engine_with_url(make_config(connection_type="mysql"))
     assert create_async_engine.call_args.args[0].startswith("mysql+aiomysql://")
+
+
+def test_mssql_engine_url() -> None:
+    """An mssql connection builds an aioodbc URL carrying the ODBC driver."""
+    create_async_engine = make_engine_with_url(make_config(connection_type="mssql"))
+    url = create_async_engine.call_args.args[0]
+    assert url.startswith("mssql+aioodbc://user:secret@127.0.0.1:5432/test?")
+    assert "driver=ODBC+Driver+18+for+SQL+Server" in url
+    assert "TrustServerCertificate=yes" in url
+
+
+def test_mssql_engine_url_respects_configured_driver() -> None:
+    """A connection.driver override replaces the default ODBC driver."""
+    config = make_config(connection_type="mssql")
+    config["connection"]["driver"] = "ODBC Driver 17 for SQL Server"
+    create_async_engine = make_engine_with_url(config)
+    assert "driver=ODBC+Driver+17+for+SQL+Server" in create_async_engine.call_args.args[0]
 
 
 def test_unsupported_engine_raises() -> None:
@@ -97,6 +114,15 @@ async def test_get_tables_uses_database_schema_on_mysql() -> None:
     await database.get_tables()
     bound = [params for (_sql, params, _stmt) in engine.executed if params]
     assert bound and all(params.get("schema") == "test" for params in bound)
+
+
+async def test_get_tables_uses_dbo_schema_on_mssql() -> None:
+    """The SQL Server path filters information_schema by the dbo schema."""
+    engine = FakeEngine(schema={"users": [column_meta("id", "int")]}, dialect_name="mssql")
+    database = build_database(make_config(connection_type="mssql"), engine)
+    await database.get_tables()
+    bound = [params for (_sql, params, _stmt) in engine.executed if params]
+    assert bound and all(params.get("schema") == "dbo" for params in bound)
 
 
 async def test_get_tables_applies_readonly_execution_options() -> None:
@@ -225,6 +251,19 @@ async def test_get_data_applies_offset_and_limit() -> None:
     statement = engine.executed[-1][2]
     assert statement._offset == 25
     assert statement._limit == 50
+    assert statement._order_by_clauses == ()
+
+
+async def test_get_data_mssql_orders_by_select_null() -> None:
+    """On SQL Server the query gains the ORDER BY that OFFSET/FETCH requires."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]}, dialect_name="mssql")
+    database = build_database(make_config(connection_type="mssql"), engine)
+    await database.get_data(passthrough_table(), 25, 50)
+
+    statement = engine.executed[-1][2]
+    assert statement._offset == 25
+    assert statement._limit == 50
+    assert [str(clause) for clause in statement._order_by_clauses] == ["(SELECT NULL)"]
 
 
 async def test_get_data_emits_debug_sql(capturing_console: CapturingConsole) -> None:
@@ -373,3 +412,134 @@ async def test_get_tables_mysql_has_no_separate_foreign_keys() -> None:
     database = build_database(config, engine)
     tables = await database.get_tables()
     assert tables[0].foreign_keys == []
+
+
+def mssql_column(name: str, data_type: str, **overrides: Any) -> Dict[str, Any]:
+    """Build an MSSQL INFORMATION_SCHEMA.COLUMNS style DDL row."""
+    row = {
+        "name": name,
+        "data_type": data_type,
+        "char_length": None,
+        "numeric_precision": None,
+        "numeric_scale": None,
+        "datetime_precision": None,
+        "is_nullable": "YES",
+        "default_value": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_mssql_column_type_renders_arguments() -> None:
+    """Sized, decimal and fractional-seconds types carry their arguments."""
+    assert Database.mssql_column_type("nvarchar", 255, None, None, None) == "nvarchar(255)"
+    assert Database.mssql_column_type("nvarchar", -1, None, None, None) == "nvarchar(max)"
+    assert Database.mssql_column_type("varbinary", -1, None, None, None) == "varbinary(max)"
+    assert Database.mssql_column_type("decimal", None, 10, 2, None) == "decimal(10,2)"
+    assert Database.mssql_column_type("datetime2", None, None, None, 7) == "datetime2(7)"
+    assert Database.mssql_column_type("int", None, 10, 0, None) == "int"
+
+
+def test_mssql_ddl_brackets_identifiers() -> None:
+    """The SQL Server builder bracket-quotes identifiers and renders the PK."""
+    columns = [
+        ("id", "int", True, None),
+        ("email", "nvarchar(255)", True, None),
+        ("note", "nvarchar(max)", False, "(N'')"),
+    ]
+    assert Database.mssql_ddl("users", columns, ["id"]) == (
+        "CREATE TABLE [users] (\n"
+        "    [id] int NOT NULL,\n"
+        "    [email] nvarchar(255) NOT NULL,\n"
+        "    [note] nvarchar(max) DEFAULT (N''),\n"
+        "    PRIMARY KEY ([id])\n"
+        ");"
+    )
+
+
+def test_mssql_index_statements_group_columns() -> None:
+    """Per-column index rows regroup into one statement per index."""
+    rows = [
+        FakeRow({"index_name": "users_email_idx", "is_unique": False, "column_name": "email"}),
+        FakeRow({"index_name": "users_pair_idx", "is_unique": True, "column_name": "a"}),
+        FakeRow({"index_name": "users_pair_idx", "is_unique": True, "column_name": "b"}),
+    ]
+    assert Database.mssql_index_statements("users", rows) == [
+        "CREATE INDEX [users_email_idx] ON [users] ([email]);",
+        "CREATE UNIQUE INDEX [users_pair_idx] ON [users] ([a], [b]);",
+    ]
+
+
+def test_mssql_foreign_key_statements_group_composite_keys() -> None:
+    """Per-column foreign key rows regroup into one ALTER TABLE per constraint."""
+    rows = [
+        FakeRow({"name": "fk_pair", "column_name": "a", "referenced_table": "t", "referenced_column": "x"}),
+        FakeRow({"name": "fk_pair", "column_name": "b", "referenced_table": "t", "referenced_column": "y"}),
+    ]
+    assert Database.mssql_foreign_key_statements("orders", rows) == [
+        "ALTER TABLE [orders] ADD CONSTRAINT [fk_pair] FOREIGN KEY ([a], [b]) REFERENCES [t] ([x], [y]);"
+    ]
+
+
+async def test_get_tables_attaches_mssql_ddl() -> None:
+    """get_tables reconstructs SQL Server DDL with exact types and the PK."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "int")]},
+        dialect_name="mssql",
+        ddl_columns={
+            "users": [
+                mssql_column("id", "int", is_nullable="NO", numeric_precision=10, numeric_scale=0),
+                mssql_column("email", "nvarchar", char_length=255),
+            ]
+        },
+        primary_keys={"users": ["id"]},
+    )
+    config = make_config(connection_type="mssql", output={"type": "file", "location": "out", "ddl": True})
+    database = build_database(config, engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl == (
+        "CREATE TABLE [users] (\n    [id] int NOT NULL,\n    [email] nvarchar(255),\n    PRIMARY KEY ([id])\n);"
+    )
+
+
+async def test_get_tables_mssql_ddl_appends_indexes() -> None:
+    """Secondary indexes are appended to the reconstructed SQL Server DDL."""
+    engine = FakeEngine(
+        schema={"users": [column_meta("id", "int")]},
+        dialect_name="mssql",
+        ddl_columns={"users": [mssql_column("id", "int", is_nullable="NO")]},
+        primary_keys={"users": ["id"]},
+        index_rows={"users": [{"index_name": "users_email_idx", "is_unique": False, "column_name": "email"}]},
+    )
+    config = make_config(connection_type="mssql", output={"type": "file", "location": "out", "ddl": True})
+    database = build_database(config, engine)
+    tables = await database.get_tables()
+    assert tables[0].ddl is not None
+    assert tables[0].ddl.startswith("CREATE TABLE [users]")
+    assert tables[0].ddl.endswith("CREATE INDEX [users_email_idx] ON [users] ([email]);")
+
+
+async def test_get_tables_mssql_foreign_keys() -> None:
+    """SQL Server foreign keys become deferred ALTER TABLE statements."""
+    engine = FakeEngine(
+        schema={"orders": [column_meta("id", "int")]},
+        dialect_name="mssql",
+        ddl_columns={"orders": [mssql_column("id", "int", is_nullable="NO")]},
+        primary_keys={"orders": ["id"]},
+        foreign_keys={
+            "orders": [
+                {
+                    "name": "orders_user_fk",
+                    "column_name": "user_id",
+                    "referenced_table": "users",
+                    "referenced_column": "id",
+                }
+            ]
+        },
+    )
+    config = make_config(connection_type="mssql", output={"type": "file", "location": "out", "ddl": True})
+    database = build_database(config, engine)
+    tables = await database.get_tables()
+    assert tables[0].foreign_keys == [
+        "ALTER TABLE [orders] ADD CONSTRAINT [orders_user_fk] FOREIGN KEY ([user_id]) REFERENCES [users] ([id]);"
+    ]
