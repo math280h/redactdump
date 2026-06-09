@@ -1,8 +1,9 @@
 from typing import List
 
 from rich.console import Console
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import select, text
 from sqlalchemy import table as sql_table
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from redactdump.core.models import Table, TableColumn
 from redactdump.core.redactor import Redactor
@@ -26,11 +27,11 @@ class Database:
         if self.config["connection"]["type"] == "postgresql" or self.config["connection"]["type"] == "pgsql":
             engine = "postgresql+psycopg://"
         elif self.config["connection"]["type"] == "mysql":
-            engine = "mysql+pymysql://"
+            engine = "mysql+aiomysql://"
         else:
             raise Exception("Unsupported database engine")
 
-        self.engine = create_engine(
+        self.engine: AsyncEngine = create_async_engine(
             f"{engine}{self.config['connection']['username']}:"
             f"{self.config['connection']['password']}@"
             f"{self.config['connection']['host']}:"
@@ -39,7 +40,11 @@ class Database:
             echo=False,
         )
 
-    def get_tables(self) -> List[Table]:
+    async def dispose(self) -> None:
+        """Dispose of the engine and its connection pool."""
+        await self.engine.dispose()
+
+    async def get_tables(self) -> List[Table]:
         """Get a list of tables.
 
         Returns:
@@ -47,10 +52,10 @@ class Database:
         """
         schema = self.config["connection"]["database"] if self.engine.dialect.name == "mysql" else "public"
         tables: List[Table] = []
-        with self.engine.connect() as conn:
-            conn = conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
-            with conn.begin():
-                result = conn.execute(
+        async with self.engine.connect() as conn:
+            conn = await conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
+            async with conn.begin():
+                result = await conn.execute(
                     text(
                         "SELECT table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND "
                         "table_schema = :schema"
@@ -60,7 +65,7 @@ class Database:
 
                 for table in result:
                     table_columns = []
-                    columns = conn.execute(
+                    columns = await conn.execute(
                         text(
                             "SELECT column_name AS column_name, column_default AS column_default, "
                             "is_nullable AS is_nullable, data_type AS data_type FROM "
@@ -85,7 +90,7 @@ class Database:
                     tables.append(Table(table[0], table_columns))
         return tables
 
-    def count_rows(self, table: Table) -> int:
+    async def count_rows(self, table: Table) -> int:
         """Get the number of rows in a table.
 
         Args:
@@ -94,16 +99,16 @@ class Database:
         Returns:
             int: The number of rows in the table.
         """
-        with self.engine.connect() as conn:
-            conn = conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
-            with conn.begin():
-                result = conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name)))
+        async with self.engine.connect() as conn:
+            conn = await conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
+            async with conn.begin():
+                result = await conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name)))
 
                 for item in result:
                     return item[0]
         return 0
 
-    def get_data(self, table: Table, offset: int, limit: int) -> list[list[TableColumn]]:
+    async def get_data(self, table: Table, offset: int, limit: int) -> list[list[TableColumn]]:
         """Get data from a table.
 
         Args:
@@ -115,13 +120,13 @@ class Database:
             list: The data.
         """
         data = []
-        with self.engine.connect() as conn:
-            conn = conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
+        async with self.engine.connect() as conn:
+            conn = await conn.execution_options(postgresql_readonly=True, postgresql_deferrable=True)
 
             if not set(self.config["limits"]["select_columns"]).issubset([column.name for column in table.columns]):
                 return []
 
-            with conn.begin():
+            async with conn.begin():
                 select_value = (
                     "*"
                     if not self.config["limits"]["select_columns"]
@@ -134,7 +139,7 @@ class Database:
                         f"{table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
                     )
 
-                result = conn.execute(
+                result = await conn.execute(
                     select(text(select_value)).offset(offset).limit(limit).select_from(sql_table(table.name))
                 )
                 records = [dict(row._mapping) for row in result]

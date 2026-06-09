@@ -12,9 +12,10 @@ dependencies = [
     "PyYAML>=6.0.3",
     "pydantic>=2.13",
     "typer>=0.26",
-    "SQLAlchemy>=2.0.50",
+    "SQLAlchemy[asyncio]>=2.0.50",
     "psycopg[binary]>=3.3",
-    "pymysql>=1.2",
+    "aiomysql>=0.3.2",
+    "aiofiles>=25.1",
     "faker>=40.0",
 ]
 
@@ -25,6 +26,8 @@ redactdump = "redactdump.app:start_application"
 dev = [
     "pytest>=9.0",
     "pytest-cov>=7.1",
+    "pytest-asyncio>=1.4",
+    "pymysql>=1.2",
     "ruff>=0.15",
     "ty>=0.0.44",
 ]
@@ -32,6 +35,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=redactdump --cov-report=term-missing --cov-fail-under=90"
+asyncio_mode = "auto"
 markers = [
     "integration: tests that require a live database (selected with -m integration)",
 ]

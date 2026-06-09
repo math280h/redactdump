@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -28,10 +28,10 @@ def sample_rows() -> list:
     ]
 
 
-def test_single_file_output(tmp_path: Path) -> None:
+async def test_single_file_output(tmp_path: Path) -> None:
     """All rows are written as INSERT statements into one file."""
     file = File(build_config(tmp_path / "dump"), Console())
-    name = file.write_to_file(Table("users", []), sample_rows())
+    name = await file.write_to_file(Table("users", []), sample_rows())
 
     content = (tmp_path / "dump.sql").read_text()
     assert name == "dump.sql"
@@ -48,10 +48,10 @@ def test_single_file_truncated_on_init(tmp_path: Path) -> None:
     assert target.read_text() == ""
 
 
-def test_single_file_naming_template(tmp_path: Path) -> None:
+async def test_single_file_naming_template(tmp_path: Path) -> None:
     """The naming template is applied with table_name dropped and no stray separators."""
     file = File(build_config(tmp_path / "dump", naming="export-[table_name]-[timestamp]"), Console())
-    file.write_to_file(Table("users", []), sample_rows())
+    await file.write_to_file(Table("users", []), sample_rows())
 
     files = list(tmp_path.glob("*.sql"))
     assert len(files) == 1
@@ -109,11 +109,11 @@ def test_format_value_escapes_single_quotes() -> None:
     assert File.format_value(column("tsvector", "a'b")) == "'a''b'::tsvector"
 
 
-def test_write_to_file_emits_cast_in_insert(tmp_path: Path) -> None:
+async def test_write_to_file_emits_cast_in_insert(tmp_path: Path) -> None:
     """A cast type is rendered inside the full INSERT line written to disk."""
     file = File(build_config(tmp_path / "dump"), Console())
     row = [TableColumn("ip", "inet", True, "", "192.168.0.1")]
-    file.write_to_file(Table("hosts", []), [row])
+    await file.write_to_file(Table("hosts", []), [row])
 
     content = (tmp_path / "dump.sql").read_text()
     assert content == "INSERT INTO hosts (\"ip\") VALUES ('192.168.0.1'::inet);\n"
@@ -129,14 +129,13 @@ def test_resolve_file_path_drops_table_name_cleanly() -> None:
         assert "--" not in stem
 
 
-def test_single_file_concurrent_writes(tmp_path: Path) -> None:
-    """Concurrent writes from many threads never interleave a line."""
+async def test_single_file_concurrent_writes(tmp_path: Path) -> None:
+    """Concurrent writes from many coroutines never interleave a line."""
     file = File(build_config(tmp_path / "dump"), Console())
     table = Table("events", [])
     rows = [[TableColumn("id", "integer", False, "", i)] for i in range(200)]
 
-    with ThreadPoolExecutor(max_workers=8) as exe:
-        list(exe.map(lambda row: file.write_to_file(table, [row]), rows))
+    await asyncio.gather(*(file.write_to_file(table, [row]) for row in rows))
 
     lines = (tmp_path / "dump.sql").read_text().splitlines()
     assert len(lines) == 200
@@ -151,37 +150,37 @@ def build_multi_config(location: object, naming: Optional[str] = None) -> dict:
     return {"debug": {"enabled": False}, "output": output}
 
 
-def test_multi_file_output_default_name(tmp_path: Path) -> None:
+async def test_multi_file_output_default_name(tmp_path: Path) -> None:
     """Without a naming template the file is named after the table."""
     outdir = tmp_path / "out"
     outdir.mkdir()
     file = File(build_multi_config(outdir), Console())
-    name = file.write_to_file(Table("users", []), sample_rows())
+    name = await file.write_to_file(Table("users", []), sample_rows())
 
     assert name is not None
     assert name.startswith("users-") and name.endswith(".sql")
     assert (outdir / name).read_text() == 'INSERT INTO users ("id", "name") VALUES (1, \'Alice\');\n'
 
 
-def test_multi_file_output_named_template(tmp_path: Path) -> None:
+async def test_multi_file_output_named_template(tmp_path: Path) -> None:
     """The naming template is applied to per-table files."""
     outdir = tmp_path / "out"
     outdir.mkdir()
     file = File(build_multi_config(outdir, naming="dump-[table_name]-[timestamp]"), Console())
-    name = file.write_to_file(Table("users", []), sample_rows())
+    name = await file.write_to_file(Table("users", []), sample_rows())
 
     assert name is not None
     assert name.startswith("dump-users-") and name.endswith(".sql")
     assert "[timestamp]" not in name
 
 
-def test_multi_file_appends_across_writes(tmp_path: Path) -> None:
+async def test_multi_file_appends_across_writes(tmp_path: Path) -> None:
     """Two writes to the same table file append rather than overwrite."""
     outdir = tmp_path / "out"
     outdir.mkdir()
     file = File(build_multi_config(outdir, naming="[table_name]"), Console())
-    file.write_to_file(Table("users", []), sample_rows())
-    file.write_to_file(Table("users", []), sample_rows())
+    await file.write_to_file(Table("users", []), sample_rows())
+    await file.write_to_file(Table("users", []), sample_rows())
 
     lines = (outdir / "users.sql").read_text().splitlines()
     assert len(lines) == 2
@@ -238,12 +237,12 @@ def test_format_value_bytea_accepts_bytearray() -> None:
     assert File.format_value(column("bytea", bytearray(b"\x01\x02"))) == "'\\x0102'::bytea"
 
 
-def test_write_to_file_unknown_type_returns_none(tmp_path: Path) -> None:
+async def test_write_to_file_unknown_type_returns_none(tmp_path: Path) -> None:
     """An output type that is neither file nor multi_file writes nothing."""
     config = {"debug": {"enabled": False}, "output": {"type": "file", "location": str(tmp_path / "dump")}}
     file = File(config, Console())
     file.config["output"]["type"] = "other"
-    assert file.write_to_file(Table("users", []), sample_rows()) is None
+    assert await file.write_to_file(Table("users", []), sample_rows()) is None
 
 
 def test_debug_output_for_single_file(tmp_path: Path) -> None:

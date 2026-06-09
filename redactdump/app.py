@@ -1,6 +1,5 @@
 import asyncio
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import typer
@@ -68,7 +67,7 @@ class RedactDump:
         self.database = Database(self.config, self.console)
         self.file = File(self.config, self.console)
 
-    def dump(self, table: Table) -> tuple[Table, int, Optional[str]]:
+    async def dump(self, table: Table) -> tuple[Table, int, Optional[str]]:
         """Dump a table to a file.
 
         Args:
@@ -77,7 +76,7 @@ class RedactDump:
         self.console.print(f":construction: [blue]Working on table:[/blue] {table.name}")
 
         row_count = (
-            self.database.count_rows(table)
+            await self.database.count_rows(table)
             if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
             else int(self.config["limits"]["max_rows_per_table"])
         )
@@ -95,44 +94,53 @@ class RedactDump:
                 continue
 
             limit = step if x + step < row_count else step + row_count - x
-            location = self.file.write_to_file(table, self.database.get_data(table, last_num, limit))
+            data = await self.database.get_data(table, last_num, limit)
+            location = await self.file.write_to_file(table, data)
             last_num = x
 
         return table, row_count, location
 
     async def run(self) -> None:
         """Run the redactdump application."""
-        tables = self.database.get_tables()
+        try:
+            tables = await self.database.get_tables()
 
-        if not tables:
-            self.console.print("[red]No tables found[/red]")
-            sys.exit(1)
+            if not tables:
+                self.console.print("[red]No tables found[/red]")
+                sys.exit(1)
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as exe:
-            result = exe.map(self.dump, tables)
+            semaphore = asyncio.Semaphore(self.max_workers)
 
-        self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
-        table = RichTable()
-        table.add_column("Name", no_wrap=True)
-        table.add_column("Row Count", no_wrap=True)
-        table.add_column("Output", no_wrap=True)
+            async def bounded_dump(table: Table) -> tuple[Table, int, Optional[str]]:
+                async with semaphore:
+                    return await self.dump(table)
 
-        sorted_output = sorted(result, key=lambda d: d[1], reverse=True)
+            result = await asyncio.gather(*(bounded_dump(table) for table in tables))
 
-        row_count_limited = (
-            ""
-            if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
-            else " (Limited via config)"
-        )
+            self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
+            table = RichTable()
+            table.add_column("Name", no_wrap=True)
+            table.add_column("Row Count", no_wrap=True)
+            table.add_column("Output", no_wrap=True)
 
-        for res in sorted_output:
-            table.add_row(
-                res[0].name,
-                f"{str(res[1])}{row_count_limited}",
-                res[2] if res[2] is not None else "No data",
+            sorted_output = sorted(result, key=lambda d: d[1], reverse=True)
+
+            row_count_limited = (
+                ""
+                if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
+                else " (Limited via config)"
             )
 
-        self.console.print(table)
+            for res in sorted_output:
+                table.add_row(
+                    res[0].name,
+                    f"{str(res[1])}{row_count_limited}",
+                    res[2] if res[2] is not None else "No data",
+                )
+
+            self.console.print(table)
+        finally:
+            await self.database.dispose()
 
 
 @cli.command()
@@ -140,12 +148,19 @@ def main(
     config: str = typer.Option(..., "-c", "--config", help="Path to dump configuration."),
     user: Optional[str] = typer.Option(None, "-u", "--user", help="Connection username."),
     password: Optional[str] = typer.Option(None, "-p", "--password", help="Connection password."),
-    max_workers: int = typer.Option(4, "--max-workers", help="Max number of workers."),
+    max_workers: int = typer.Option(4, "--max-workers", help="Max number of tables dumped concurrently."),
     debug: bool = typer.Option(False, "-d", "--debug", help="Enable debug mode."),
 ) -> None:
     """Create a redacted database dump."""
     redactor = RedactDump(config, user, password, max_workers, debug)
-    asyncio.run(redactor.run())
+    if sys.platform == "win32":  # pragma: no cover
+        loop = asyncio.SelectorEventLoop()
+        try:
+            loop.run_until_complete(redactor.run())
+        finally:
+            loop.close()
+    else:  # pragma: no cover
+        asyncio.run(redactor.run())
 
 
 def start_application() -> None:

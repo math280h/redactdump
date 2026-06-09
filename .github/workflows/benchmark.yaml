@@ -1,0 +1,74 @@
+name: "Benchmark"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: benchmark
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: "postgres:16"
+        ports:
+          - "5432:5432"
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: test
+        options: '--health-cmd "pg_isready -U test" --health-interval 10s --health-timeout 5s --health-retries 10'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Run benchmark
+      env:
+        BENCH_DB_HOST: 127.0.0.1
+        BENCH_DB_PORT: "5432"
+        BENCH_DB_USER: test
+        BENCH_DB_PASSWORD: secret
+        BENCH_DB_NAME: test
+        BENCH_ROWS: "50000"
+        BENCH_TABLES: "4"
+        BENCH_ITERATIONS: "5"
+      run: uv run python benchmarks/benchmark_dump.py --output benchmarks/output.json
+
+    - name: Ensure benchmark history branch exists
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if gh api "repos/${{ github.repository }}/branches/gh-pages" >/dev/null 2>&1; then
+          echo "gh-pages branch already exists"
+        else
+          echo "Creating gh-pages branch for benchmark history"
+          default=$(gh api "repos/${{ github.repository }}" --jq .default_branch)
+          sha=$(gh api "repos/${{ github.repository }}/git/refs/heads/$default" --jq .object.sha)
+          gh api --method POST "repos/${{ github.repository }}/git/refs" -f ref=refs/heads/gh-pages -f sha="$sha"
+        fi
+
+    - name: Store and compare benchmark result
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: redactdump
+        tool: customBiggerIsBetter
+        output-file-path: benchmarks/output.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        alert-threshold: "150%"
+        comment-on-alert: true
+        fail-on-alert: true
+        summary-always: true
