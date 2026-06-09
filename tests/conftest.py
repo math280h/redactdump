@@ -3,7 +3,6 @@
 import asyncio
 import io
 import re
-import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -15,11 +14,14 @@ from rich.console import Console
 from redactdump.core.database import Database
 
 
-def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> Optional[dict]:
-    """Force a selector event loop on Windows so the async drivers can connect."""
-    if sys.platform == "win32":
-        return {"selector": asyncio.SelectorEventLoop}
-    return None
+def pytest_asyncio_loop_factories(config: pytest.Config, item: pytest.Item) -> dict:
+    """Run async tests on a selector event loop so psycopg works on every platform.
+
+    pytest-asyncio requires an implemented hook to always return a non-empty
+    mapping, so this returns the selector loop unconditionally (it is the
+    default on Linux and the only loop psycopg can use on Windows).
+    """
+    return {"selector": asyncio.SelectorEventLoop}
 
 
 class FakeRow:

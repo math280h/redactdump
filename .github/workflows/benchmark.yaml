@@ -47,6 +47,19 @@ jobs:
         BENCH_ITERATIONS: "5"
       run: uv run python benchmarks/benchmark_dump.py --output benchmarks/output.json
 
+    - name: Ensure benchmark history branch exists
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if gh api "repos/${{ github.repository }}/branches/gh-pages" >/dev/null 2>&1; then
+          echo "gh-pages branch already exists"
+        else
+          echo "Creating gh-pages branch for benchmark history"
+          default=$(gh api "repos/${{ github.repository }}" --jq .default_branch)
+          sha=$(gh api "repos/${{ github.repository }}/git/refs/heads/$default" --jq .object.sha)
+          gh api --method POST "repos/${{ github.repository }}/git/refs" -f ref=refs/heads/gh-pages -f sha="$sha"
+        fi
+
     - name: Store and compare benchmark result
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
