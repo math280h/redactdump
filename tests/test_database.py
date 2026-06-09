@@ -1009,3 +1009,16 @@ async def test_get_tables_mssql_foreign_keys() -> None:
     assert tables[0].foreign_keys == [
         "ALTER TABLE [orders] ADD CONSTRAINT [orders_user_fk] FOREIGN KEY ([user_id]) REFERENCES [users] ([id]);"
     ]
+
+
+async def test_get_data_consistent_rule_is_stable_across_rows() -> None:
+    """A consistent rule maps duplicate values identically within a batch."""
+    patterns = {"column": [{"pattern": "^email$", "replacement": "uuid4", "consistent": True}]}
+    data = {"users": [{"id": 1, "email": "dup@x.com"}, {"id": 2, "email": "dup@x.com"}]}
+    engine = FakeEngine(data=data)
+    database = build_database(make_config(patterns=patterns), engine)
+
+    rows = await database.get_data(passthrough_table(), 0, 100)
+    emails = [next(column.value for column in row if column.name == "email") for row in rows]
+    assert emails[0] == emails[1]
+    assert emails[0] != "dup@x.com"

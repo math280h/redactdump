@@ -1,5 +1,9 @@
+import hashlib
+import hmac
 import importlib
+import os
 import re
+import secrets
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Pattern, Union
@@ -7,6 +11,10 @@ from typing import Any, Dict, List, Optional, Pattern, Union
 from faker import Faker
 
 from redactdump.core.models import TableColumn
+
+# Environment variable supplying the consistency seed. It takes precedence
+# over redact.seed so the secret can stay out of config files.
+SEED_ENV_VAR = "REDACTDUMP_SEED"
 
 
 @dataclass
@@ -16,6 +24,7 @@ class CustomRule:
     replacement: Optional[str]
     pattern: Pattern
     arguments: Dict[str, Any] = field(default_factory=dict)
+    consistent: bool = False
 
 
 class Redactor:
@@ -29,6 +38,17 @@ class Redactor:
         """
         self.config = config
         self.fake: Faker = Faker()
+        # A second instance reserved for consistent replacements; it is
+        # re-seeded per value, which must never disturb the unpredictable
+        # stream the normal rules draw from.
+        self.consistent_fake: Faker = Faker()
+
+        # The HMAC key behind consistent replacements. Without a configured
+        # seed a random per-run secret is used: identical values still map
+        # to identical fakes within the run, but the mapping cannot be
+        # recomputed offline by enumerating candidate input values.
+        seed = os.environ.get(SEED_ENV_VAR) or self.config["redact"].get("seed") or secrets.token_hex(16)
+        self.seed_key: bytes = seed.encode()
 
         self.data_rules: List[CustomRule] = []
         self.column_rules: List[CustomRule] = []
@@ -65,6 +85,7 @@ class Redactor:
         for dotted_path in providers:
             provider = self.import_from_path(dotted_path, "faker provider")
             self.fake.add_provider(provider)
+            self.consistent_fake.add_provider(provider)
 
     def resolve_arguments(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Resolve replacement arguments, importing any class-valued ones.
@@ -102,7 +123,12 @@ class Redactor:
                 self.validate_replacement(replacement)
 
                 arguments = self.resolve_arguments(pattern.get("arguments") or {})
-                rule = CustomRule(replacement, re.compile(pattern["pattern"]), arguments)
+                rule = CustomRule(
+                    replacement,
+                    re.compile(pattern["pattern"]),
+                    arguments,
+                    bool(pattern.get("consistent")),
+                )
                 if category == "data":
                     self.data_rules.append(rule)
                 elif category == "column":
@@ -113,23 +139,39 @@ class Redactor:
             for named in named_columns:
                 replacement = named["replacement"]
                 self.validate_replacement(replacement)
-                rule = CustomRule(replacement, re.compile(f"^{re.escape(named['name'])}$"))
+                rule = CustomRule(
+                    replacement,
+                    re.compile(f"^{re.escape(named['name'])}$"),
+                    consistent=bool(named.get("consistent")),
+                )
                 self.table_rules.setdefault(table_name, []).append(rule)
 
     def get_replacement(
-        self, replacement: Optional[str], arguments: Optional[Dict[str, Any]] = None
+        self,
+        replacement: Optional[str],
+        arguments: Optional[Dict[str, Any]] = None,
+        value: Any = None,
+        consistent: bool = False,
     ) -> Union[str, Any]:
         """Get replacement value.
 
         Args:
             replacement (str): Replacement.
             arguments (dict): Keyword arguments passed to the faker provider.
+            value (Any): The original cell value; consistent rules derive
+                their output from it.
+            consistent (bool): Map identical inputs to identical outputs by
+                seeding the generator from an HMAC of the original value.
         """
-        if replacement is not None:
-            func = getattr(self.fake, replacement)
-            value = func(**(arguments or {}))
-            return value
-        return "NULL"
+        if replacement is None:
+            return "NULL"
+        if consistent:
+            digest = hmac.new(self.seed_key, repr(value).encode(), hashlib.sha256).digest()
+            self.consistent_fake.seed_instance(int.from_bytes(digest[:8], "big"))
+            func = getattr(self.consistent_fake, replacement)
+            return func(**(arguments or {}))
+        func = getattr(self.fake, replacement)
+        return func(**(arguments or {}))
 
     def redact(self, data: dict, columns: List[TableColumn], table_name: Optional[str] = None) -> list[TableColumn]:
         """Redact data.
@@ -156,7 +198,7 @@ class Redactor:
             for column in [
                 column for column in columns if rule.pattern.search(column.name) and column.name not in columns_redacted
             ]:
-                column.value = self.get_replacement(rule.replacement, rule.arguments)
+                column.value = self.get_replacement(rule.replacement, rule.arguments, column.value, rule.consistent)
                 columns_redacted.append(column.name)
 
         for rule in self.data_rules:
@@ -169,7 +211,9 @@ class Redactor:
                     continue
 
                 if rule.pattern.search(str(value)):
-                    discovered_column.value = self.get_replacement(rule.replacement, rule.arguments)
+                    discovered_column.value = self.get_replacement(
+                        rule.replacement, rule.arguments, value, rule.consistent
+                    )
                     columns_redacted.append(discovered_column.name)
 
         return columns
