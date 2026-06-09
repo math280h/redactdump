@@ -107,6 +107,21 @@ redact:
             import: myapp.models.Status
 ````
 
+#### Static values
+
+To replace matched cells with a fixed literal instead of generated data, give
+the rule a `value` instead of a `replacement`. The literal is written verbatim
+and keeps its type, so `'REDACTED'`, `0`, an empty string or `null` (a real
+SQL NULL) all work. A rule must carry exactly one of the two keys:
+
+````yaml
+redact:
+  patterns:
+    column:
+      - pattern: '^internal_notes$'
+        value: 'REDACTED'
+````
+
 #### Consistent replacements
 
 By default every cell gets a fresh random value, so the same real value
@@ -186,7 +201,7 @@ number); leave the flag off where that must not leak.
 matching. Each entry names the column (exact match) and the replacement to
 use; a `null` replacement writes `NULL`. These rules apply only to the named
 table and take precedence over `redact.patterns` rules for the same column.
-The entries accept `consistent`, `unique` and `preserve_null` as well:
+The entries accept `value`, `consistent`, `unique` and `preserve_null` as well:
 
 ````yaml
 redact:

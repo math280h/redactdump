@@ -294,6 +294,32 @@ def test_non_bool_unique_rejected(tmp_path: Path) -> None:
         load(tmp_path, data)
 
 
+def test_static_value_accepted(tmp_path: Path) -> None:
+    """A value literal validates on pattern and named column rules."""
+    data = base_config()
+    data["redact"]["patterns"] = {"column": [{"pattern": "^notes$", "value": "REDACTED"}]}
+    data["redact"]["columns"] = {"users": [{"name": "balance", "value": 0}]}
+    result = load(tmp_path, data)
+    assert result["redact"]["patterns"]["column"][0]["value"] == "REDACTED"
+    assert result["redact"]["columns"]["users"][0]["value"] == 0
+
+
+def test_replacement_and_value_together_rejected(tmp_path: Path) -> None:
+    """A rule carrying both replacement and value violates the schema."""
+    data = base_config()
+    data["redact"]["patterns"] = {"column": [{"pattern": "^notes$", "replacement": "name", "value": "REDACTED"}]}
+    with pytest.raises(RedactDumpError, match="exactly one of replacement and value"):
+        load(tmp_path, data)
+
+
+def test_rule_without_replacement_or_value_rejected(tmp_path: Path) -> None:
+    """A rule carrying neither replacement nor value violates the schema."""
+    data = base_config()
+    data["redact"]["columns"] = {"users": [{"name": "notes"}]}
+    with pytest.raises(RedactDumpError, match="exactly one of replacement and value"):
+        load(tmp_path, data)
+
+
 def test_redact_seed_accepted(tmp_path: Path) -> None:
     """The redact.seed key validates and is preserved."""
     data = base_config()

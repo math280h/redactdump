@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from redactdump.core.errors import RedactDumpError
 
@@ -10,6 +10,26 @@ class StrictModel(BaseModel):
     """Base model that rejects unknown keys and type coercion."""
 
     model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class ReplacementRule(StrictModel):
+    """Base for rules that produce a replacement.
+
+    A rule replaces matched cells either with generated data (a faker
+    provider named by ``replacement``) or with the fixed literal given as
+    ``value``; exactly one of the two keys must be present.
+    """
+
+    replacement: Optional[str] = None
+    value: Optional[Any] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def exactly_one_source(cls, data: Any) -> Any:
+        """Require exactly one of the replacement and value keys."""
+        if isinstance(data, dict) and ("replacement" in data) == ("value" in data):
+            raise ValueError("specify exactly one of replacement and value")
+        return data
 
 
 class ConnectionConfig(StrictModel):
@@ -48,21 +68,19 @@ class DebugConfig(StrictModel):
     enabled: bool
 
 
-class NamedColumn(StrictModel):
+class NamedColumn(ReplacementRule):
     """A named column replacement rule."""
 
     name: str
-    replacement: Optional[str]
     consistent: Optional[bool] = None
     unique: Optional[bool] = None
     preserve_null: Optional[bool] = None
 
 
-class PatternRule(StrictModel):
+class PatternRule(ReplacementRule):
     """A pattern based replacement rule."""
 
     pattern: str
-    replacement: Optional[str]
     arguments: Optional[Dict[str, Any]] = None
     consistent: Optional[bool] = None
     unique: Optional[bool] = None
