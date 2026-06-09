@@ -99,7 +99,9 @@ class Redactor:
                 elif category == "column":
                     self.column_rules.append(rule)
 
-    def get_replacement(self, replacement: Optional[str], arguments: Optional[Dict[str, Any]] = None) -> Union[str, Any]:
+    def get_replacement(
+        self, replacement: Optional[str], arguments: Optional[Dict[str, Any]] = None
+    ) -> Union[str, Any]:
         """Get replacement value.
 
         Args:
