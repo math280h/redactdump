@@ -179,6 +179,24 @@ output:
   location: './output/'
 ````
 
+### Table filters
+
+`limits.tables` restricts the dump to the listed tables, and
+`limits.exclude_tables` skips tables (audit logs, migration bookkeeping,
+huge append-only tables). Both accept exact names or regular expressions;
+an entry must match the whole table name, and exclusion wins when both
+match:
+
+````yaml
+limits:
+  tables:
+    - users
+    - 'orders_.*'
+  exclude_tables:
+    - alembic_version
+    - 'audit_.*'
+````
+
 ### Output types
 
 `output.type` controls how dumps are written:

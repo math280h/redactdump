@@ -71,6 +71,23 @@ def test_existing_select_columns_preserved(tmp_path: Path) -> None:
     assert result["limits"]["select_columns"] == ["id", "email"]
 
 
+def test_table_filters_accepted(tmp_path: Path) -> None:
+    """The limits.tables and limits.exclude_tables lists validate."""
+    data = base_config()
+    data["limits"] = {"tables": ["users", "orders_.*"], "exclude_tables": ["audit_.*"]}
+    result = load(tmp_path, data)
+    assert result["limits"]["tables"] == ["users", "orders_.*"]
+    assert result["limits"]["exclude_tables"] == ["audit_.*"]
+
+
+def test_non_list_table_filter_rejected(tmp_path: Path) -> None:
+    """A bare string table filter violates the schema."""
+    data = base_config()
+    data["limits"] = {"tables": "users"}
+    with pytest.raises(RedactDumpError):
+        load(tmp_path, data)
+
+
 def test_multi_file_output_accepted(tmp_path: Path) -> None:
     """multi_file is a valid output type."""
     data = base_config()
