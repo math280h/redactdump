@@ -4,7 +4,7 @@ import os
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import List, Optional, Sequence, Set, Union
+from typing import Dict, List, Optional, Sequence, Set, Union
 
 import aiofiles
 from rich.console import Console
@@ -94,6 +94,7 @@ class File:
         output = self.config["output"]
         self.file_path: Optional[str] = self.resolve_file_path(output) if output["type"] == "file" else None
         self.ddl_written: Set[str] = set()
+        self.table_files: Dict[str, str] = {}
         self.dialect: str = DIALECTS.get(self.config.get("connection", {}).get("type"), "postgresql")
 
         self.create_output_locations()
@@ -167,6 +168,25 @@ class File:
         else:
             name = f"{table.name}-{time.strftime('%Y-%m-%d-%H-%M-%S')}.sql"
         return name
+
+    def table_file_name(self, output: dict, table: Table) -> str:
+        """Get the file name for a table, resolved once per run.
+
+        The timestamp in the name has per-second resolution, so recomputing it
+        per write could split one table's batches (and its deferred statements)
+        across several files. The first resolved name is reused for every
+        subsequent write to that table.
+
+        Args:
+            output (dict): Output configuration.
+            table (Table): Table.
+
+        Returns:
+            str: Name of the file.
+        """
+        if table.name not in self.table_files:
+            self.table_files[table.name] = self.get_name(output, table)
+        return self.table_files[table.name]
 
     @staticmethod
     def format_value(column: TableColumn, dialect: str = "postgresql") -> str:
@@ -340,7 +360,7 @@ class File:
         """
         output = self.config["output"]
         if output["type"] == "multi_file":
-            name = self.get_name(output, table)
+            name = self.table_file_name(output, table)
             payload = self.build_payload(table, rows)
             async with aiofiles.open(f"{output['location']}/{name}", "a") as file:
                 await file.write(payload)
@@ -368,7 +388,7 @@ class File:
         payload = "".join(f"{statement}\n" for statement in statements)
         output = self.config["output"]
         if output["type"] == "multi_file":
-            async with aiofiles.open(f"{output['location']}/{self.get_name(output, table)}", "a") as file:
+            async with aiofiles.open(f"{output['location']}/{self.table_file_name(output, table)}", "a") as file:
                 await file.write(payload)
         elif output["type"] == "file" and self.file_path is not None:
             async with self.lock:

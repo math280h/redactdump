@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -187,6 +188,52 @@ async def test_multi_file_appends_across_writes(tmp_path: Path) -> None:
 
     lines = (outdir / "users.sql").read_text().splitlines()
     assert len(lines) == 2
+
+
+class TickingClock:
+    """datetime stand-in whose now() advances one second per call."""
+
+    def __init__(self) -> None:
+        self.current = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def now(self, tz: object = None) -> datetime:
+        """Return the current fake time and advance it by one second."""
+        value = self.current
+        self.current = value + timedelta(seconds=1)
+        return value
+
+
+async def test_multi_file_batches_stay_in_one_file_across_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batches written across a second boundary land in the table's single file."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    monkeypatch.setattr("redactdump.core.file.datetime", TickingClock())
+    file = File(build_multi_config(outdir), Console())
+    await file.write_to_file(Table("users", []), sample_rows())
+    await file.write_to_file(Table("users", []), sample_rows())
+
+    files = list(outdir.glob("*.sql"))
+    assert len(files) == 1
+    assert len(files[0].read_text().splitlines()) == 2
+
+
+async def test_multi_file_statements_stay_in_table_file_across_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deferred statements written later still land in the table's own file."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    monkeypatch.setattr("redactdump.core.file.datetime", TickingClock())
+    file = File(build_multi_config(outdir), Console())
+    fk = 'ALTER TABLE "orders" ADD CONSTRAINT "fk" FOREIGN KEY (uid) REFERENCES users(id);'
+    await file.write_to_file(Table("orders", []), sample_rows())
+    await file.write_statements(Table("orders", []), [fk])
+
+    files = list(outdir.glob("*.sql"))
+    assert len(files) == 1
+    assert files[0].read_text().endswith(fk + "\n")
 
 
 def test_create_output_locations_makes_multi_file_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
