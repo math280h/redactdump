@@ -193,6 +193,23 @@ def test_non_string_connection_schema_rejected(tmp_path: Path) -> None:
         load(tmp_path, data)
 
 
+def test_sqlite_connection_without_host_port_accepted(tmp_path: Path) -> None:
+    """A SQLite connection needs only its type and database file path."""
+    data = base_config()
+    data["connection"] = {"type": "sqlite", "database": "./app.db"}
+    result = load(tmp_path, data)
+    assert result["connection"]["type"] == "sqlite"
+    assert result["connection"]["database"] == "./app.db"
+
+
+def test_server_connection_requires_host_and_port(tmp_path: Path) -> None:
+    """Server databases still require a host and port."""
+    data = base_config()
+    data["connection"] = {"type": "pgsql", "database": "test"}
+    with pytest.raises(RedactDumpError, match="host and port are required"):
+        load(tmp_path, data)
+
+
 def test_pattern_replacement_none_allowed(tmp_path: Path) -> None:
     """A null replacement in a pattern is permitted by the schema."""
     data = base_config()

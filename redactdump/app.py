@@ -57,16 +57,18 @@ class RedactDump:
 
         self.config = Config(config_path).load_config()
 
-        if "username" not in self.config["connection"]:
-            if user is None:
-                self.console.print("[red]Connection username is required, either via config or arguments[/red]")
-                sys.exit(1)
-            self.config["connection"]["username"] = user
-        if "password" not in self.config["connection"]:
-            if password is None:
-                self.console.print("[red]Connection password is required, either via config or arguments[/red]")
-                sys.exit(1)
-            self.config["connection"]["password"] = password
+        # SQLite opens a file directly and takes no credentials.
+        if self.config["connection"]["type"] != "sqlite":
+            if "username" not in self.config["connection"]:
+                if user is None:
+                    self.console.print("[red]Connection username is required, either via config or arguments[/red]")
+                    sys.exit(1)
+                self.config["connection"]["username"] = user
+            if "password" not in self.config["connection"]:
+                if password is None:
+                    self.console.print("[red]Connection password is required, either via config or arguments[/red]")
+                    sys.exit(1)
+                self.config["connection"]["password"] = password
 
         self.database = Database(self.config, self.console)
         # A dry run must leave the filesystem untouched; constructing File

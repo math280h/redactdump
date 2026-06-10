@@ -162,23 +162,30 @@ class Database:
             # certificate SQL Server ships with, so trust it explicitly.
             driver = self.config["connection"].get("driver") or MSSQL_DEFAULT_DRIVER
             query = {"driver": driver, "TrustServerCertificate": "yes"}
+        elif self.config["connection"]["type"] == "sqlite":
+            drivername = "sqlite+aiosqlite"
         else:
             raise RedactDumpError(
                 f"Unsupported database engine '{self.config['connection']['type']}'. "
-                "Supported types: pgsql, postgresql, mysql, mssql."
+                "Supported types: pgsql, postgresql, mysql, mssql, sqlite."
             )
 
         # URL.create escapes every component, so credentials containing
         # reserved characters (@, /, :, #) survive the round trip.
-        url = URL.create(
-            drivername,
-            username=self.config["connection"]["username"],
-            password=self.config["connection"]["password"],
-            host=self.config["connection"]["host"],
-            port=self.config["connection"]["port"],
-            database=self.config["connection"]["database"],
-            query=query,
-        )
+        if drivername == "sqlite+aiosqlite":
+            # SQLite opens the file named by connection.database; there is
+            # no server, so the URL carries no credentials, host or port.
+            url = URL.create(drivername, database=self.config["connection"]["database"])
+        else:
+            url = URL.create(
+                drivername,
+                username=self.config["connection"]["username"],
+                password=self.config["connection"]["password"],
+                host=self.config["connection"]["host"],
+                port=self.config["connection"]["port"],
+                database=self.config["connection"]["database"],
+                query=query,
+            )
         self.engine: AsyncEngine = create_async_engine(url, echo=False)
 
     async def dispose(self) -> None:
@@ -249,6 +256,8 @@ class Database:
         Returns:
             List[str]: A list of tables.
         """
+        if self.engine.dialect.name == "sqlite":
+            return await self.sqlite_tables()
         if self.configured_schema:
             schema = self.configured_schema
         elif self.engine.dialect.name == "mysql":
@@ -305,6 +314,93 @@ class Database:
                         table_obj.foreign_keys = await self.build_foreign_keys(conn, table[0], schema)
                     tables.append(table_obj)
         return tables
+
+    @staticmethod
+    def quote_sqlite(name: str) -> str:
+        """Quote an identifier for SQLite.
+
+        PRAGMA statements cannot bind parameters, so table names read from
+        sqlite_master are interpolated; quoting keeps any name valid.
+
+        Args:
+            name (str): The identifier.
+        """
+        escaped = name.replace('"', '""')
+        return f'"{escaped}"'
+
+    async def sqlite_tables(self) -> List[Table]:
+        """List tables and their columns for a SQLite database.
+
+        SQLite has no information_schema: sqlite_master lists the tables and
+        PRAGMA table_info supplies each table's columns, nullability,
+        defaults and primary key positions. Internal sqlite_* tables are
+        skipped.
+
+        Returns:
+            List[Table]: The tables to dump.
+        """
+        tables: List[Table] = []
+        async with self.engine.connect() as conn:
+            async with conn.begin():
+                result = await conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+                )
+
+                for row in result:
+                    name = row[0]
+                    if not self.table_selected(name):
+                        if self.config["debug"]["enabled"]:
+                            self.console.print(f"[cyan]DEBUG: Skipping table (table filters): {name}[/cyan]")
+                        continue
+
+                    columns_result = await conn.execute(text(f"PRAGMA table_info({self.quote_sqlite(name)})"))
+                    table_columns = []
+                    key_positions: List[Tuple[int, str]] = []
+                    for column in columns_result:
+                        if column.pk:
+                            key_positions.append((column.pk, column.name))
+                        if (
+                            not self.config["limits"]["select_columns"]
+                            or column.name in self.config["limits"]["select_columns"]
+                        ):
+                            table_columns.append(
+                                TableColumn(column.name, column.type, not column.notnull, column.dflt_value)
+                            )
+
+                    table_obj = Table(name, table_columns)
+                    table_obj.primary_key = [column for _position, column in sorted(key_positions)]
+                    if self.config["output"].get("ddl"):
+                        table_obj.ddl = await self.build_sqlite_ddl(conn, name)
+                    tables.append(table_obj)
+        return tables
+
+    async def build_sqlite_ddl(self, conn: Any, table_name: str) -> str:
+        """Build the CREATE TABLE DDL for a SQLite table.
+
+        sqlite_master stores the authoritative CREATE TABLE text (like
+        MySQL's SHOW CREATE TABLE), foreign keys included; secondary indexes
+        are separate rows carrying their own CREATE INDEX statements.
+
+        Args:
+            conn (AsyncConnection): An open read connection.
+            table_name (str): Name of the table.
+
+        Returns:
+            str: The CREATE TABLE statement, plus any secondary indexes.
+        """
+        result = await conn.execute(
+            text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = :table"), {"table": table_name}
+        )
+        ddl = f"{list(result)[0][0]};"
+
+        index_result = await conn.execute(
+            text("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = :table AND sql IS NOT NULL"),
+            {"table": table_name},
+        )
+        indexes = [row[0] for row in index_result]
+        if indexes:
+            ddl += "\n" + "\n".join(f"{statement};" for statement in indexes)
+        return ddl
 
     async def get_primary_key(self, conn: Any, table_name: str, schema: str) -> List[str]:
         """Return the table's primary key column names, in key order.

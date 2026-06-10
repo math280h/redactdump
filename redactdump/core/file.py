@@ -74,7 +74,28 @@ MSSQL_NUMERIC_TYPES = frozenset(
     }
 )
 
-DIALECTS = {"mysql": "mysql", "mssql": "mssql"}
+# SQLite column types are whatever the table declared (e.g. "DECIMAL(10,5)"),
+# so the type is reduced to its base name before this set is consulted; as
+# with the other engines it only matters for a numeric column carrying a
+# string value.
+SQLITE_NUMERIC_TYPES = frozenset(
+    {
+        "int",
+        "integer",
+        "tinyint",
+        "smallint",
+        "mediumint",
+        "bigint",
+        "real",
+        "double",
+        "double precision",
+        "float",
+        "numeric",
+        "decimal",
+    }
+)
+
+DIALECTS = {"mysql": "mysql", "mssql": "mssql", "sqlite": "sqlite"}
 
 
 class File:
@@ -207,6 +228,8 @@ class File:
             return File._format_value_mysql(value, data_type)
         if dialect == "mssql":
             return File._format_value_mssql(value, data_type)
+        if dialect == "sqlite":
+            return File._format_value_sqlite(value, data_type)
         return File._format_value_postgres(value, data_type)
 
     @staticmethod
@@ -281,6 +304,27 @@ class File:
             return f"X'{bytes(value).hex()}'"
         text = json.dumps(value) if data_type in JSON_TYPES and isinstance(value, dict) else str(value)
         literal = text.replace("\\", "\\\\").replace("'", "''")
+        return f"'{literal}'"
+
+    @staticmethod
+    def _format_value_sqlite(value: object, data_type: str) -> str:
+        """Render a value as a SQLite literal, driven by the Python type.
+
+        SQLite has no boolean type (1/0 by convention), binary becomes an
+        X'..' hex literal and dict JSON is serialised to text. Backslashes
+        are literal in SQLite strings, so only single quotes are escaped.
+        """
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        if isinstance(value, (int, float, Decimal)):
+            return str(value)
+        base_type = data_type.split("(")[0].strip().lower() if data_type else ""
+        if base_type in SQLITE_NUMERIC_TYPES:
+            return str(value)
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return f"X'{bytes(value).hex()}'"
+        text = json.dumps(value) if isinstance(value, dict) else str(value)
+        literal = text.replace("'", "''")
         return f"'{literal}'"
 
     @staticmethod

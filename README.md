@@ -13,6 +13,7 @@ Easily create database dumps with support for redacting data (And replacing that
 * MySQL
 * PostgreSQL
 * Microsoft SQL Server
+* SQLite
 
 _More coming soon..._
 
@@ -253,6 +254,15 @@ redact:
   `connection.driver`. The server's TLS certificate is trusted implicitly
   (`TrustServerCertificate=yes`), matching the self-signed certificate SQL
   Server ships with.
+* `sqlite`: SQLite via `aiosqlite`. There is no server: `connection.database`
+  is the path to the database file, and host, port and credentials are
+  neither needed nor used.
+
+  ````yaml
+  connection:
+    type: sqlite
+    database: ./app.db
+  ````
 
 `connection.schema` selects the schema to dump. It defaults to `public` on
 PostgreSQL, `dbo` on SQL Server and the connection database on MySQL. When a

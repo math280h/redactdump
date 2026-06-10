@@ -1085,3 +1085,118 @@ async def test_get_data_consistent_rule_is_stable_across_rows() -> None:
     emails = [next(column.value for column in row if column.name == "email") for row in rows]
     assert emails[0] == emails[1]
     assert emails[0] != "dup@x.com"
+
+
+def sqlite_config(**kwargs: Any) -> Dict[str, Any]:
+    """Build a loaded-style config for a SQLite connection."""
+    config = make_config(**kwargs)
+    config["connection"] = {"type": "sqlite", "database": "/data/app.db"}
+    return config
+
+
+def pragma_column(
+    cid: int, name: str, data_type: str, notnull: int = 0, pk: int = 0, default: Any = None
+) -> Dict[str, Any]:
+    """Build a PRAGMA table_info style row."""
+    return {"cid": cid, "name": name, "type": data_type, "notnull": notnull, "dflt_value": default, "pk": pk}
+
+
+SQLITE_USERS = [
+    pragma_column(0, "id", "INTEGER", notnull=1, pk=1),
+    pragma_column(1, "email", "TEXT"),
+]
+
+
+def test_sqlite_url_has_no_credentials() -> None:
+    """A SQLite connection URL carries only the file path."""
+    create_async_engine = make_engine_with_url(sqlite_config())
+    assert rendered_url(create_async_engine) == "sqlite+aiosqlite:////data/app.db"
+
+
+async def test_sqlite_get_tables_lists_columns_and_primary_key() -> None:
+    """Tables come from sqlite_master and columns from PRAGMA table_info."""
+    engine = FakeEngine(schema={"users": SQLITE_USERS}, dialect_name="sqlite")
+    database = build_database(sqlite_config(), engine)
+
+    tables = await database.get_tables()
+
+    assert [table.name for table in tables] == ["users"]
+    columns = [(column.name, column.data_type, column.is_nullable) for column in tables[0].columns]
+    assert columns == [("id", "INTEGER", False), ("email", "TEXT", True)]
+    assert tables[0].primary_key == ["id"]
+    assert tables[0].schema is None
+    assert tables[0].ddl is None
+
+
+async def test_sqlite_composite_primary_key_in_key_order() -> None:
+    """A composite primary key is ordered by key position, not column order."""
+    schema = {"memberships": [pragma_column(0, "b", "INTEGER", pk=2), pragma_column(1, "a", "INTEGER", pk=1)]}
+    engine = FakeEngine(schema=schema, dialect_name="sqlite")
+    database = build_database(sqlite_config(), engine)
+
+    tables = await database.get_tables()
+    assert tables[0].primary_key == ["a", "b"]
+
+
+async def test_sqlite_tables_respect_table_filters() -> None:
+    """The include/exclude filters apply to SQLite listings too."""
+    engine = FakeEngine(schema={"users": SQLITE_USERS, "audit_log": SQLITE_USERS}, dialect_name="sqlite")
+    database = build_database(sqlite_config(limits={"exclude_tables": ["audit_log"]}), engine)
+
+    tables = await database.get_tables()
+    assert [table.name for table in tables] == ["users"]
+
+
+async def test_sqlite_skipped_table_logged_in_debug(capturing_console: CapturingConsole) -> None:
+    """Debug mode reports tables skipped by the filters."""
+    engine = FakeEngine(schema={"audit_log": SQLITE_USERS}, dialect_name="sqlite")
+    config = sqlite_config(debug=True, limits={"exclude_tables": ["audit_log"]})
+    database = build_database(config, engine, console=capturing_console.console)
+
+    assert await database.get_tables() == []
+    assert "Skipping table" in capturing_console.text
+
+
+async def test_sqlite_select_columns_filter_applies() -> None:
+    """select_columns narrows the columns while the primary key is preserved."""
+    engine = FakeEngine(schema={"users": SQLITE_USERS}, dialect_name="sqlite")
+    database = build_database(sqlite_config(select_columns=["email"]), engine)
+
+    tables = await database.get_tables()
+    assert [column.name for column in tables[0].columns] == ["email"]
+    assert tables[0].primary_key == ["id"]
+
+
+async def test_sqlite_ddl_from_sqlite_master() -> None:
+    """The DDL is the authoritative sqlite_master text plus secondary indexes."""
+    engine = FakeEngine(
+        schema={"users": SQLITE_USERS},
+        create_statements={"users": "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)"},
+        ddl_indexes={"users": ["CREATE INDEX idx_users_email ON users (email)"]},
+        dialect_name="sqlite",
+    )
+    database = build_database(sqlite_config(output={"type": "file", "location": "out", "ddl": True}), engine)
+
+    tables = await database.get_tables()
+    assert tables[0].ddl == (
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);\nCREATE INDEX idx_users_email ON users (email);"
+    )
+    assert tables[0].foreign_keys == []
+
+
+async def test_sqlite_ddl_without_indexes() -> None:
+    """A table without secondary indexes gets only its CREATE TABLE."""
+    engine = FakeEngine(
+        schema={"users": SQLITE_USERS},
+        create_statements={"users": "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)"},
+        dialect_name="sqlite",
+    )
+    database = build_database(sqlite_config(output={"type": "file", "location": "out", "ddl": True}), engine)
+
+    tables = await database.get_tables()
+    assert tables[0].ddl == "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);"
+
+
+def test_quote_sqlite_escapes_embedded_quotes() -> None:
+    """An identifier containing a double quote is escaped by doubling it."""
+    assert Database.quote_sqlite('weird"name') == '"weird""name"'
