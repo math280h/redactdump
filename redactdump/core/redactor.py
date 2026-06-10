@@ -33,6 +33,27 @@ class CustomRule:
     # The flag distinguishes "no literal configured" from a literal None.
     literal: Any = None
     is_literal: bool = False
+    # Identifies the rule in error messages and dry-run output.
+    label: str = ""
+
+    def describe_replacement(self) -> str:
+        """Describe what this rule writes, for dry-run output."""
+        if self.is_literal:
+            base = f"value {self.literal!r}"
+        elif self.replacement is None:
+            base = "NULL"
+        else:
+            base = self.replacement
+        flags = [
+            name
+            for name, enabled in (
+                ("consistent", self.consistent),
+                ("unique", self.unique),
+                ("preserve_null", self.preserve_null),
+            )
+            if enabled
+        ]
+        return f"{base} ({', '.join(flags)})" if flags else base
 
 
 class Redactor:
@@ -123,7 +144,7 @@ class Redactor:
             sys.exit(f"{replacement} is not a valid replacement.")
 
     @staticmethod
-    def validate_flags(rule: CustomRule, label: str) -> None:
+    def validate_flags(rule: CustomRule) -> None:
         """Abort with a message when a rule combines incompatible flags.
 
         A consistent rule must give identical outputs for identical inputs,
@@ -132,12 +153,11 @@ class Redactor:
 
         Args:
             rule (CustomRule): The loaded rule.
-            label (str): Identifies the rule in the error message.
         """
         if rule.unique and rule.consistent:
-            sys.exit(f"The rule for {label} cannot be both unique and consistent.")
+            sys.exit(f"The rule for {rule.label} cannot be both unique and consistent.")
         if rule.unique and rule.is_literal:
-            sys.exit(f"The rule for {label} cannot be unique with a static value.")
+            sys.exit(f"The rule for {rule.label} cannot be unique with a static value.")
 
     def load_rules(self) -> None:
         """Load redaction rules from the pattern groups and named table columns."""
@@ -157,8 +177,9 @@ class Redactor:
                     bool(pattern.get("preserve_null")),
                     pattern.get("value"),
                     "value" in pattern,
+                    label=f"pattern {pattern['pattern']}",
                 )
-                self.validate_flags(rule, f"pattern {pattern['pattern']}")
+                self.validate_flags(rule)
                 if category == "data":
                     self.data_rules.append(rule)
                 elif category == "column":
@@ -177,8 +198,9 @@ class Redactor:
                     preserve_null=bool(named.get("preserve_null")),
                     literal=named.get("value"),
                     is_literal="value" in named,
+                    label=f"column {named['name']} of table {table_name}",
                 )
-                self.validate_flags(rule, f"column {named['name']} of table {table_name}")
+                self.validate_flags(rule)
                 self.table_rules.setdefault(table_name, []).append(rule)
 
     def get_replacement(
@@ -216,6 +238,23 @@ class Redactor:
                 f"{replacement} ran out of unique values; "
                 "it cannot generate enough distinct outputs for the rows being dumped."
             ) from None
+
+    def column_rule_for(self, column_name: str, table_name: Optional[str] = None) -> Optional[CustomRule]:
+        """Return the rule that would redact a column, ignoring data rules.
+
+        Mirrors the precedence of redact(): named rules for the table first,
+        then column patterns, first match wins. Data rules are not considered
+        because they depend on each cell's value.
+
+        Args:
+            column_name (str): Name of the column.
+            table_name (Optional[str]): Table the column belongs to.
+        """
+        named_rules = self.table_rules.get(table_name, []) if table_name else []
+        for rule in named_rules + self.column_rules:
+            if rule.pattern.search(column_name):
+                return rule
+        return None
 
     def rule_replacement(self, rule: CustomRule, value: Any) -> Any:
         """Compute a rule's output for one cell.

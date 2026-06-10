@@ -575,3 +575,81 @@ def test_named_column_static_value_and_unique_rejected() -> None:
     """The value/unique conflict is also rejected on redact.columns entries."""
     with pytest.raises(SystemExit):
         table_redactor({"users": [{"name": "notes", "value": "REDACTED", "unique": True}]})
+
+
+def test_column_rule_for_returns_first_matching_pattern() -> None:
+    """The first column pattern that matches the name wins, as in redact()."""
+    red = redactor(
+        {
+            "column": [
+                {"pattern": "^email$", "replacement": "email"},
+                {"pattern": "email", "replacement": "name"},
+            ]
+        }
+    )
+    rule = red.column_rule_for("email")
+    assert rule is red.column_rules[0]
+
+
+def test_column_rule_for_returns_none_without_match() -> None:
+    """A column no rule matches reports no rule."""
+    red = redactor({"column": [{"pattern": "^email$", "replacement": "email"}]})
+    assert red.column_rule_for("id") is None
+
+
+def test_column_rule_for_prefers_named_rules() -> None:
+    """Named rules for the table outrank column patterns, as in redact()."""
+    red = table_redactor(
+        {"users": [{"name": "email", "value": "REDACTED"}]},
+        {"column": [{"pattern": "^email$", "replacement": "email"}]},
+    )
+    rule = red.column_rule_for("email", "users")
+    assert rule is red.table_rules["users"][0]
+
+
+def test_column_rule_for_ignores_named_rules_without_table() -> None:
+    """Without a table name only the column patterns are consulted."""
+    red = table_redactor({"users": [{"name": "email", "value": "REDACTED"}]})
+    assert red.column_rule_for("email") is None
+
+
+def test_column_rule_for_ignores_data_rules() -> None:
+    """Data rules depend on cell values and are never reported per column."""
+    red = redactor({"data": [{"pattern": ".*", "replacement": "name"}]})
+    assert red.column_rule_for("email") is None
+
+
+def test_rule_labels_identify_origin() -> None:
+    """Rules carry a label naming the pattern or table column they came from."""
+    red = table_redactor(
+        {"users": [{"name": "email", "replacement": "email"}]},
+        {"column": [{"pattern": "^age$", "replacement": "random_int"}]},
+    )
+    assert red.column_rules[0].label == "pattern ^age$"
+    assert red.table_rules["users"][0].label == "column email of table users"
+
+
+def test_describe_replacement_provider() -> None:
+    """A plain provider rule is described by the provider name."""
+    red = redactor({"column": [{"pattern": "^email$", "replacement": "email"}]})
+    assert red.column_rules[0].describe_replacement() == "email"
+
+
+def test_describe_replacement_includes_flags() -> None:
+    """Enabled flags are listed after the provider name."""
+    red = redactor(
+        {"column": [{"pattern": "^email$", "replacement": "email", "consistent": True, "preserve_null": True}]}
+    )
+    assert red.column_rules[0].describe_replacement() == "email (consistent, preserve_null)"
+
+
+def test_describe_replacement_null() -> None:
+    """A null replacement is described as NULL."""
+    red = redactor({"column": [{"pattern": "^ssn$", "replacement": None}]})
+    assert red.column_rules[0].describe_replacement() == "NULL"
+
+
+def test_describe_replacement_literal() -> None:
+    """A static value rule shows the literal."""
+    red = redactor({"column": [{"pattern": "^notes$", "value": "REDACTED"}]})
+    assert red.column_rules[0].describe_replacement() == "value 'REDACTED'"
