@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781050818725,
+  "lastUpdate": 1781051774066,
   "repoUrl": "https://github.com/math280h/redactdump",
   "entries": {
     "redactdump": [
@@ -630,6 +630,36 @@ window.BENCHMARK_DATA = {
             "value": 3823.8,
             "unit": "rows/sec",
             "extra": "rows=50000 tables=4 iterations=5 median=13.076s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "1547127+math280h@users.noreply.github.com",
+            "name": "Mathias V. Nielsen",
+            "username": "math280h"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "310817c8a056bbad5e67d828707cbe8940be81e6",
+          "message": "feat: sqlite support (#77)\n\n* feat: sqlite support\n\n* ci: sqlite integration",
+          "timestamp": "2026-06-09T20:34:34-04:00",
+          "tree_id": "6045742b103fcdd8b79ad31f66545a5723322743",
+          "url": "https://github.com/math280h/redactdump/commit/310817c8a056bbad5e67d828707cbe8940be81e6"
+        },
+        "date": 1781051773720,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "PostgreSQL dump throughput",
+            "value": 3840.36,
+            "unit": "rows/sec",
+            "extra": "rows=50000 tables=4 iterations=5 median=13.020s"
           }
         ]
       }
