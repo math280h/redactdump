@@ -1,13 +1,15 @@
-"""Integration tests that run against a live PostgreSQL, MySQL or SQL Server database.
+"""Integration tests that run against a live PostgreSQL, MySQL, SQL Server or SQLite database.
 
-These are skipped unless INTEGRATION_DB is set to "postgresql", "mysql" or
-"mssql". The matching service is provided by docker-compose locally and by
-GitHub Actions service containers in CI. Connection details come from the
-INTEGRATION_* environment variables.
+These are skipped unless INTEGRATION_DB is set to "postgresql", "mysql",
+"mssql" or "sqlite". The matching service is provided by docker-compose
+locally and by GitHub Actions service containers in CI; SQLite needs no
+service and runs against a file named by INTEGRATION_DATABASE. Connection
+details come from the INTEGRATION_* environment variables.
 """
 
 import json
 import os
+import tempfile
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -28,31 +30,37 @@ INTEGRATION_DB = os.environ.get("INTEGRATION_DB", "")
 if not INTEGRATION_DB:
     pytest.skip("INTEGRATION_DB not set", allow_module_level=True)
 
-DEFAULT_PORTS = {"postgresql": 5432, "pgsql": 5432, "mysql": 3306, "mssql": 1433}
+DEFAULT_PORTS = {"postgresql": 5432, "pgsql": 5432, "mysql": 3306, "mssql": 1433, "sqlite": 0}
 DRIVER_URLS = {
     "postgresql": "postgresql+psycopg",
     "pgsql": "postgresql+psycopg",
     "mysql": "mysql+pymysql",
     "mssql": "mssql+pyodbc",
+    "sqlite": "sqlite",
 }
-CONNECTION_TYPES = {"postgresql": "pgsql", "pgsql": "pgsql", "mysql": "mysql", "mssql": "mssql"}
+CONNECTION_TYPES = {"postgresql": "pgsql", "pgsql": "pgsql", "mysql": "mysql", "mssql": "mssql", "sqlite": "sqlite"}
 
 if INTEGRATION_DB not in DRIVER_URLS:
     raise ValueError(f"Unsupported INTEGRATION_DB: {INTEGRATION_DB}")
 
 IS_MSSQL = INTEGRATION_DB == "mssql"
+IS_SQLITE = INTEGRATION_DB == "sqlite"
 
 HOST = os.environ.get("INTEGRATION_HOST", "127.0.0.1")
 PORT = int(os.environ.get("INTEGRATION_PORT", str(DEFAULT_PORTS[INTEGRATION_DB])))
 USER = os.environ.get("INTEGRATION_USER", "sa" if IS_MSSQL else "test")
 PASSWORD = os.environ.get("INTEGRATION_PASSWORD", "RedactSecret123" if IS_MSSQL else "secret")
-DATABASE = os.environ.get("INTEGRATION_DATABASE", "test")
+DEFAULT_DATABASE = os.path.join(tempfile.gettempdir(), "redactdump-integration.db") if IS_SQLITE else "test"
+DATABASE = os.environ.get("INTEGRATION_DATABASE", DEFAULT_DATABASE)
 
 MSSQL_QUERY = "?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
 
 
 def connection_url(database: Optional[str] = None) -> str:
     """Build the synchronous SQLAlchemy URL used for schema setup and teardown."""
+    if IS_SQLITE:
+        # DATABASE is the database file path; there is no server.
+        return f"sqlite:///{DATABASE}"
     url = f"{DRIVER_URLS[INTEGRATION_DB]}://{USER}:{PASSWORD}@{HOST}:{PORT}/{database or DATABASE}"
     if IS_MSSQL:
         url += MSSQL_QUERY
@@ -79,14 +87,17 @@ def build_config(
     output: Dict[str, Any] = {"type": "file", "location": "out"}
     if ddl:
         output["ddl"] = True
-    connection: Dict[str, Any] = {
-        "type": CONNECTION_TYPES[INTEGRATION_DB],
-        "host": HOST,
-        "port": PORT,
-        "username": USER,
-        "password": PASSWORD,
-        "database": DATABASE,
-    }
+    if IS_SQLITE:
+        connection: Dict[str, Any] = {"type": "sqlite", "database": DATABASE}
+    else:
+        connection = {
+            "type": CONNECTION_TYPES[INTEGRATION_DB],
+            "host": HOST,
+            "port": PORT,
+            "username": USER,
+            "password": PASSWORD,
+            "database": DATABASE,
+        }
     if schema:
         connection["schema"] = schema
     return {
@@ -428,15 +439,20 @@ async def test_dialect_specific_types_round_trip(
         blob, ts, json_type, bool_type = "BYTEA", "TIMESTAMP", "JSONB", "BOOLEAN"
     elif is_mysql:
         blob, ts, json_type, bool_type = "BLOB", "DATETIME", "JSON", "BOOLEAN"
+    elif IS_SQLITE:
+        # SQLite stores datetimes and JSON as text; BOOLEAN is 1/0 affinity.
+        blob, ts, json_type, bool_type = "BLOB", "TEXT", "TEXT", "BOOLEAN"
     else:
         blob, ts, json_type, bool_type = "VARBINARY(100)", "DATETIME2", "NVARCHAR(MAX)", "BIT"
     columns = f"id INTEGER NOT NULL PRIMARY KEY, flag {bool_type}, payload {blob}, txt TEXT, ts {ts}, j {json_type}"
+    # SQLite has no datetime type, so the timestamp travels as its ISO text.
+    ts_value: Any = "2024-01-02 03:04:05" if IS_SQLITE else datetime(2024, 1, 2, 3, 4, 5)
     params: Dict[str, Any] = {
         "id": 1,
         "flag": True,
         "payload": b"\xde\xad\xbe\xef",
         "txt": "back\\slash and 'quote'",
-        "ts": datetime(2024, 1, 2, 3, 4, 5),
+        "ts": ts_value,
         "j": '{"a": 1}',
     }
     names = "id, flag, payload, txt, ts, j"
@@ -482,7 +498,7 @@ async def test_dialect_specific_types_round_trip(
         assert bool(value_of(row, "flag")) is True
         assert bytes(value_of(row, "payload")) == b"\xde\xad\xbe\xef"
         assert value_of(row, "txt") == "back\\slash and 'quote'"
-        assert value_of(row, "ts") == datetime(2024, 1, 2, 3, 4, 5)
+        assert value_of(row, "ts") == ts_value
         json_value = value_of(row, "j")
         assert (json.loads(json_value) if isinstance(json_value, str) else json_value) == {"a": 1}
         if is_pg:
@@ -643,3 +659,71 @@ async def test_dump_run_prepends_ddl(typed_table: None, make_database: Callable[
 
     content = (tmp_path / "schema.sql").read_text()
     assert content.strip() == table.ddl
+
+
+async def test_sqlite_indexes_and_foreign_keys_round_trip(
+    make_database: Callable[..., Database], setup_engine: Engine, tmp_path: Path
+) -> None:
+    """SQLite secondary indexes and in-table foreign keys survive a dump and replay.
+
+    The SQLite twin of the PostgreSQL and SQL Server tests above. Foreign keys
+    live inside the CREATE TABLE text rather than deferred statements, so the
+    replayed table must carry the index, enforce the constraint (once the
+    foreign_keys pragma is on) and reproduce the data.
+    """
+    if not IS_SQLITE:
+        pytest.skip("this index and foreign key round trip is SQLite-specific")
+
+    with setup_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS node"))
+        conn.execute(
+            text(
+                "CREATE TABLE node (id INTEGER NOT NULL PRIMARY KEY, parent_id INTEGER, label VARCHAR(50), "
+                "CONSTRAINT node_parent_fk FOREIGN KEY (parent_id) REFERENCES node(id))"
+            )
+        )
+        conn.execute(text("CREATE INDEX node_label_idx ON node (label)"))
+        conn.execute(text("INSERT INTO node (id, parent_id, label) VALUES (1, 2, 'a'), (2, NULL, 'b')"))
+    try:
+        database = make_database(ddl=True)
+        table = await find_table(database, "node")
+        assert table.ddl is not None and "CREATE INDEX node_label_idx" in table.ddl
+        assert "REFERENCES node" in table.ddl
+        assert table.foreign_keys == []
+
+        rows = await database.get_data(table, 0, 10)
+        file_config = {
+            "connection": {"type": "sqlite"},
+            "debug": {"enabled": False},
+            "output": {"type": "file", "location": str(tmp_path / "dump")},
+        }
+        output = File(file_config, Console())
+        await output.write_to_file(table, rows)
+        dump_sql = (tmp_path / "dump.sql").read_text()
+
+        with setup_engine.begin() as conn:
+            conn.execute(text("DROP TABLE node"))
+            for statement in (chunk.strip() for chunk in dump_sql.split(";")):
+                if statement:
+                    conn.execute(text(statement))
+
+        with setup_engine.connect() as conn:
+            index = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'node_label_idx'")
+            ).first()
+            assert index is not None
+
+        with pytest.raises(IntegrityError):
+            with setup_engine.begin() as conn:
+                conn.execute(text("PRAGMA foreign_keys = ON"))
+                conn.execute(text("INSERT INTO node (id, parent_id, label) VALUES (3, 999, 'x')"))
+
+        reloaded = make_database()
+        restored = {
+            value_of(row, "id"): value_of(row, "parent_id")
+            for row in await reloaded.get_data(await find_table(reloaded, "node"), 0, 10)
+        }
+        assert restored == {1: 2, 2: None}
+    finally:
+        with setup_engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS node"))

@@ -80,3 +80,27 @@ jobs:
         INTEGRATION_PASSWORD: "${{ matrix.password }}"
         INTEGRATION_DATABASE: test
       run: uv run pytest -m integration --no-cov
+
+  # SQLite is file-based and needs no service container, so it runs as its
+  # own lean job rather than a matrix entry.
+  integration-sqlite:
+    name: "integration / sqlite"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Run integration tests
+      env:
+        INTEGRATION_DB: sqlite
+        INTEGRATION_DATABASE: "${{ runner.temp }}/integration.db"
+      run: uv run pytest -m integration --no-cov
