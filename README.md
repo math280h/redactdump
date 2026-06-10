@@ -36,8 +36,18 @@ Options:
   -p, --password TEXT    Connection password.
   --max-workers INTEGER  Max number of tables dumped concurrently. [default: 4]
   -d, --debug            Enable debug mode.
+  --dry-run              Show which rule would redact each column, without
+                         reading or writing any data.
   --help                 Show this message and exit.
 ```
+
+### Dry run
+
+To verify that your patterns hit the right columns before trusting a dump,
+run with `--dry-run`. It connects, lists every table and column, and shows
+which rule (if any) would redact each column - without reading any rows or
+creating any output files. Data-pattern rules depend on each cell's value, so
+they are listed separately as evaluated per cell.
 
 ## Configuration
 

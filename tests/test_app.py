@@ -11,7 +11,8 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from redactdump.app import RedactDump, cli, start_application
-from redactdump.core.models import Table
+from redactdump.core.models import Table, TableColumn
+from redactdump.core.redactor import Redactor
 
 
 def make_app(
@@ -20,6 +21,7 @@ def make_app(
     file: Any,
     max_workers: int = 2,
     console: Optional[Console] = None,
+    dry_run: bool = False,
 ) -> RedactDump:
     """Build a RedactDump instance without running its heavy constructor."""
     app = RedactDump.__new__(RedactDump)
@@ -28,6 +30,7 @@ def make_app(
     app.database = database
     app.file = file
     app.max_workers = max_workers
+    app.dry_run = dry_run
     return app
 
 
@@ -279,6 +282,89 @@ async def test_run_does_not_exit_when_all_tables_succeed() -> None:
     database.dispose.assert_awaited_once()
 
 
+def dry_run_database(redact: Dict[str, Any], tables: list) -> AsyncMock:
+    """Build a mocked database with a real redactor for dry-run tests."""
+    database = mock_database()
+    database.get_tables.return_value = tables
+    database.redactor = Redactor({"redact": redact})
+    return database
+
+
+async def test_dry_run_reports_rule_per_column(capturing_console: CapturingConsole) -> None:
+    """A dry run shows the matching rule and replacement for each column."""
+    tables = [
+        Table(
+            "users",
+            [
+                TableColumn("email", "character varying", True, ""),
+                TableColumn("id", "integer", False, ""),
+            ],
+        )
+    ]
+    file = AsyncMock()
+    database = dry_run_database(
+        {"patterns": {"column": [{"pattern": "^email$", "replacement": "email", "consistent": True}]}}, tables
+    )
+    app = make_app(make_config(), database, file, console=capturing_console.console, dry_run=True)
+
+    await app.run()
+
+    text = capturing_console.text
+    assert "pattern ^email$" in text
+    assert "email (consistent)" in text
+    assert "not redacted" in text
+    assert "No data was read or written" in text
+    database.get_data.assert_not_called()
+    database.count_rows.assert_not_called()
+    file.write_to_file.assert_not_called()
+    file.write_statements.assert_not_called()
+    database.dispose.assert_awaited_once()
+
+
+async def test_dry_run_prefers_named_rules(capturing_console: CapturingConsole) -> None:
+    """A dry run reports the named rule when it outranks a column pattern."""
+    tables = [Table("users", [TableColumn("email", "character varying", True, "")])]
+    database = dry_run_database(
+        {
+            "patterns": {"column": [{"pattern": "^email$", "replacement": "name"}]},
+            "columns": {"users": [{"name": "email", "value": "REDACTED"}]},
+        },
+        tables,
+    )
+    app = make_app(make_config(), database, AsyncMock(), console=capturing_console.console, dry_run=True)
+
+    await app.run()
+
+    text = capturing_console.text
+    assert "column email of table users" in text
+    assert "value 'REDACTED'" in text
+
+
+async def test_dry_run_lists_data_rules(capturing_console: CapturingConsole) -> None:
+    """Data rules cannot be resolved per column and are listed separately."""
+    tables = [Table("users", [TableColumn("note", "text", True, "")])]
+    database = dry_run_database({"patterns": {"data": [{"pattern": "@x.com", "replacement": "email"}]}}, tables)
+    app = make_app(make_config(), database, AsyncMock(), console=capturing_console.console, dry_run=True)
+
+    await app.run()
+
+    text = capturing_console.text
+    assert "evaluated per cell" in text
+    assert "pattern @x.com" in text
+
+
+async def test_dry_run_exits_when_no_tables() -> None:
+    """An empty database aborts a dry run as well."""
+    database = mock_database()
+    database.get_tables.return_value = []
+    app = make_app(make_config(), database, AsyncMock(), dry_run=True)
+
+    with pytest.raises(SystemExit):
+        await app.run()
+
+    database.dispose.assert_awaited_once()
+
+
 def write_config_file(tmp_path: Path, include_credentials: bool = False) -> Path:
     """Write a schema-valid config file, optionally with credentials."""
     connection: Dict[str, Any] = {"type": "pgsql", "host": "127.0.0.1", "port": 5432, "database": "test"}
@@ -327,6 +413,19 @@ def test_init_credentials_from_args(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert app.config["connection"]["password"] == "pw"
 
 
+def test_init_dry_run_skips_file_creation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dry run never constructs the file writer, leaving the filesystem untouched."""
+    config_path = write_config_file(tmp_path, include_credentials=True)
+    monkeypatch.setattr("redactdump.app.Database", MagicMock())
+    file_cls = MagicMock()
+    monkeypatch.setattr("redactdump.app.File", file_cls)
+
+    app = RedactDump(str(config_path), dry_run=True)
+
+    assert app.file is None
+    file_cls.assert_not_called()
+
+
 def test_init_credentials_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Credentials already in the config are kept without command line args."""
     config_path = write_config_file(tmp_path, include_credentials=True)
@@ -355,7 +454,7 @@ def test_cli_parses_options_and_runs(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 0
     assert ran["value"] is True
-    constructed.assert_called_once_with("cfg.yaml", "bob", "pw", 2, False)
+    constructed.assert_called_once_with("cfg.yaml", "bob", "pw", 2, False, False)
 
 
 def test_cli_requires_config() -> None:

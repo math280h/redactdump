@@ -1,6 +1,6 @@
 import asyncio
 import sys
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -27,6 +27,7 @@ class RedactDump:
         password: Optional[str] = None,
         max_workers: int = 4,
         debug: bool = False,
+        dry_run: bool = False,
     ) -> None:
         """Initialize the application.
 
@@ -36,10 +37,12 @@ class RedactDump:
             password (Optional[str]): Connection password override.
             max_workers (int): Maximum number of worker threads.
             debug (bool): Enable debug mode.
+            dry_run (bool): Report rule coverage instead of dumping.
         """
         self.console = Console()
         self.max_workers = max_workers
         self.debug = debug
+        self.dry_run = dry_run
 
         self.console.print(
             Panel(
@@ -66,7 +69,9 @@ class RedactDump:
             self.config["connection"]["password"] = password
 
         self.database = Database(self.config, self.console)
-        self.file = File(self.config, self.console)
+        # A dry run must leave the filesystem untouched; constructing File
+        # would already create the output file or directory.
+        self.file: Optional[File] = None if dry_run else File(self.config, self.console)
 
     async def dump(self, table: Table) -> tuple[Table, int, Optional[str]]:
         """Dump a table to a file.
@@ -82,6 +87,8 @@ class RedactDump:
             else int(self.config["performance"]["rows_per_request"])
         )
         location = None
+        file = self.file
+        assert file is not None  # dump() is never reached on a dry run
 
         # One connection per table so every batch reads the same snapshot.
         async with self.database.table_connection() as conn:
@@ -93,12 +100,41 @@ class RedactDump:
 
             for offset in range(0, row_count, step):
                 data = await self.database.get_data(table, offset, min(step, row_count - offset), conn=conn)
-                location = await self.file.write_to_file(table, data)
+                location = await file.write_to_file(table, data)
 
         if location is None and self.config["output"].get("ddl"):
-            location = await self.file.write_to_file(table, [])
+            location = await file.write_to_file(table, [])
 
         return table, row_count, location
+
+    def report_coverage(self, tables: List[Table]) -> None:
+        """Print which rule would redact each column, without reading any data.
+
+        Args:
+            tables (List[Table]): Tables discovered in the database.
+        """
+        redactor = self.database.redactor
+        report = RichTable(title="Dry run: rule coverage")
+        report.add_column("Table", no_wrap=True)
+        report.add_column("Column", no_wrap=True)
+        report.add_column("Type", no_wrap=True)
+        report.add_column("Rule")
+        report.add_column("Replacement")
+        for table in tables:
+            for column in table.columns:
+                rule = redactor.column_rule_for(column.name, table.name)
+                if rule is None:
+                    report.add_row(table.name, column.name, column.data_type, "-", "[dim]not redacted[/dim]")
+                else:
+                    report.add_row(table.name, column.name, column.data_type, rule.label, rule.describe_replacement())
+        self.console.print(report)
+
+        if redactor.data_rules:
+            self.console.print("\nData rules, evaluated per cell at dump time:")
+            for rule in redactor.data_rules:
+                self.console.print(f"  {rule.label} -> {rule.describe_replacement()}")
+
+        self.console.print("\n[green]Dry run complete. No data was read or written.[/green]")
 
     async def run(self) -> None:
         """Run the redactdump application."""
@@ -108,6 +144,10 @@ class RedactDump:
             if not tables:
                 self.console.print("[red]No tables found[/red]")
                 sys.exit(1)
+
+            if self.dry_run:
+                self.report_coverage(tables)
+                return
 
             semaphore = asyncio.Semaphore(self.max_workers)
             failures: dict[str, str] = {}
@@ -125,9 +165,11 @@ class RedactDump:
 
             result = await asyncio.gather(*(bounded_dump(table) for table in tables))
 
+            file = self.file
+            assert file is not None  # only a dry run leaves the file writer unset
             for table in tables:
                 if table.name not in failures:
-                    await self.file.write_statements(table, table.foreign_keys)
+                    await file.write_statements(table, table.foreign_keys)
 
             self.console.print(f"\n[green]Finished working {len(tables)} tables[/green]")
             table = RichTable()
@@ -169,10 +211,13 @@ def main(
     password: Optional[str] = typer.Option(None, "-p", "--password", help="Connection password."),
     max_workers: int = typer.Option(4, "--max-workers", help="Max number of tables dumped concurrently."),
     debug: bool = typer.Option(False, "-d", "--debug", help="Enable debug mode."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show which rule would redact each column, without reading or writing any data."
+    ),
 ) -> None:
     """Create a redacted database dump."""
     try:
-        redactor = RedactDump(config, user, password, max_workers, debug)
+        redactor = RedactDump(config, user, password, max_workers, debug, dry_run)
         if sys.platform == "win32":  # pragma: no cover
             loop = asyncio.SelectorEventLoop()
             try:
