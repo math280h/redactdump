@@ -36,8 +36,8 @@ class ConnectionConfig(StrictModel):
     """Database connection settings."""
 
     type: str
-    host: str
-    port: int
+    host: Optional[str] = None
+    port: Optional[int] = None
     database: str
     username: Optional[str] = None
     password: Optional[str] = None
@@ -45,6 +45,17 @@ class ConnectionConfig(StrictModel):
     # "schema" shadows a BaseModel attribute, so the field lives under an
     # alias; the config file key is still connection.schema.
     db_schema: Optional[str] = Field(default=None, alias="schema")
+
+    @model_validator(mode="after")
+    def require_server_fields(self) -> "ConnectionConfig":
+        """Require host and port for server databases.
+
+        SQLite connects to a file, named by connection.database; every other
+        engine needs a server address.
+        """
+        if self.type != "sqlite" and (self.host is None or self.port is None):
+            raise ValueError("host and port are required unless connection.type is sqlite")
+        return self
 
 
 class TableLimit(StrictModel):

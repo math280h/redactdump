@@ -113,6 +113,18 @@ class FakeEngine:
 
     def resolve(self, sql: str, params: Optional[Dict[str, Any]]) -> List[FakeRow]:
         """Return rows for a statement based on its SQL text."""
+        if "PRAGMA table_info" in sql:
+            match = re.search(r'PRAGMA table_info\("(.+)"\)', sql)
+            name = match.group(1).replace('""', '"') if match else ""
+            return [FakeRow(column) for column in self.schema.get(name, [])]
+        if "FROM sqlite_master" in sql:
+            if "type = 'index'" in sql:
+                table_name = (params or {}).get("table", "")
+                return [FakeRow({"sql": statement}) for statement in self.ddl_indexes.get(table_name, [])]
+            if "name = :table" in sql:
+                table_name = (params or {}).get("table", "")
+                return [FakeRow({"sql": self.create_statements.get(table_name, "")})]
+            return [FakeRow({"name": name}) for name in self.schema]
         if "CHARACTER_MAXIMUM_LENGTH" in sql:
             table_name = (params or {}).get("table", "")
             return [FakeRow(column) for column in self.ddl_columns.get(table_name, [])]

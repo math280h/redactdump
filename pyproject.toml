@@ -18,6 +18,7 @@ dependencies = [
     "aioodbc>=0.5.0",
     "aiofiles>=25.1",
     "faker>=40.0",
+    "aiosqlite>=0.22.1",
 ]
 
 [project.scripts]

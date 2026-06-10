@@ -472,6 +472,24 @@ def test_init_credentials_from_args(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert app.config["connection"]["password"] == "pw"
 
 
+def test_init_sqlite_needs_no_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SQLite connection constructs without username or password."""
+    data = {
+        "connection": {"type": "sqlite", "database": str(tmp_path / "app.db")},
+        "redact": {"patterns": {"data": []}},
+        "output": {"type": "file", "location": str(tmp_path / "dump")},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data))
+    monkeypatch.setattr("redactdump.app.Database", MagicMock())
+    monkeypatch.setattr("redactdump.app.File", MagicMock())
+
+    app = RedactDump(str(path), None, None)
+
+    assert "username" not in app.config["connection"]
+    assert "password" not in app.config["connection"]
+
+
 def test_init_dry_run_skips_file_creation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A dry run never constructs the file writer, leaving the filesystem untouched."""
     config_path = write_config_file(tmp_path, include_credentials=True)

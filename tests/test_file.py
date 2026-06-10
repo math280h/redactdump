@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -563,3 +564,57 @@ async def test_write_statements_unknown_type_writes_nothing(tmp_path: Path) -> N
     file.config["output"]["type"] = "other"
     await file.write_statements(Table("orders", []), ["ALTER TABLE orders ADD x;"])
     assert (tmp_path / "dump.sql").read_text() == ""
+
+
+async def test_sqlite_connection_quotes_inserts_with_double_quotes(tmp_path: Path) -> None:
+    """A SQLite connection emits double-quoted identifiers and sqlite literals."""
+    config = {
+        "connection": {"type": "sqlite"},
+        "debug": {"enabled": False},
+        "output": {"type": "file", "location": str(tmp_path / "dump")},
+    }
+    file = File(config, Console())
+    assert file.dialect == "sqlite"
+    await file.write_to_file(Table("users", []), sample_rows())
+
+    content = (tmp_path / "dump.sql").read_text()
+    assert content == 'INSERT INTO "users" ("id", "name") VALUES (1, \'Alice\');\n'
+
+
+def test_sqlite_booleans_are_integers() -> None:
+    """Booleans become 1/0; SQLite has no boolean type."""
+    assert File.format_value(column("boolean", True), "sqlite") == "1"
+    assert File.format_value(column("boolean", False), "sqlite") == "0"
+
+
+def test_sqlite_numbers_are_unquoted() -> None:
+    """Numeric Python values are emitted without quotes."""
+    assert File.format_value(column("INTEGER", 7), "sqlite") == "7"
+    assert File.format_value(column("REAL", 1.5), "sqlite") == "1.5"
+    assert File.format_value(column("NUMERIC", Decimal("9.99")), "sqlite") == "9.99"
+
+
+def test_sqlite_numeric_typed_string_is_unquoted() -> None:
+    """A numeric column carrying a string value stays unquoted, sized declarations included."""
+    assert File.format_value(column("DECIMAL(10,5)", "9.99000"), "sqlite") == "9.99000"
+    assert File.format_value(column("integer", "7"), "sqlite") == "7"
+
+
+def test_sqlite_binary_is_hex_literal() -> None:
+    """Binary values become X'..' hex literals."""
+    assert File.format_value(column("BLOB", b"\x01\xff"), "sqlite") == "X'01ff'"
+
+
+def test_sqlite_strings_escape_quotes_only() -> None:
+    """Single quotes are doubled; backslashes are literal in SQLite strings."""
+    assert File.format_value(column("TEXT", "O'Brien\\path"), "sqlite") == "'O''Brien\\path'"
+
+
+def test_sqlite_dict_serialised_as_json_text() -> None:
+    """A dict value is stored as serialised JSON text."""
+    assert File.format_value(column("TEXT", {"a": "b'c"}), "sqlite") == "'{\"a\": \"b''c\"}'"
+
+
+def test_sqlite_none_is_null() -> None:
+    """A None value is NULL under the sqlite dialect too."""
+    assert File.format_value(column("TEXT", None), "sqlite") == "NULL"
