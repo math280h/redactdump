@@ -644,10 +644,27 @@ class Database:
         async with self.table_connection() as fresh:
             return await self._count_rows(fresh, table)
 
-    @staticmethod
-    async def _count_rows(conn: Any, table: Table) -> int:
+    def where_clause(self, table: Table) -> Optional[str]:
+        """Return the configured row filter for a table, if any.
+
+        The clause comes from limits.per_table.<name>.where and is passed
+        through to the engine verbatim; the config author already has full
+        database access, so this is not an injection boundary.
+
+        Args:
+            table (Table): The table being read.
+        """
+        limits = self.config.get("limits") or {}
+        override = (limits.get("per_table") or {}).get(table.name) or {}
+        return override.get("where")
+
+    async def _count_rows(self, conn: Any, table: Table) -> int:
         """Run the COUNT(*) query on an open connection."""
-        result = await conn.execute(select(text("COUNT(*)")).select_from(sql_table(table.name, schema=table.schema)))
+        query = select(text("COUNT(*)")).select_from(sql_table(table.name, schema=table.schema))
+        where = self.where_clause(table)
+        if where:
+            query = query.where(text(where))
+        result = await conn.execute(query)
         for item in result:
             return item[0]
         return 0
@@ -712,10 +729,13 @@ class Database:
         select_value = (
             "*" if not self.config["limits"]["select_columns"] else ",".join(self.config["limits"]["select_columns"])
         )
+        where = self.where_clause(table)
 
         if self.config["debug"]["enabled"]:
+            where_part = f" WHERE {where}" if where else ""
             self.console.print(
-                f"[cyan]DEBUG: Running 'SELECT {select_value} FROM {table.name} OFFSET {offset} LIMIT {limit}'[/cyan]"
+                f"[cyan]DEBUG: Running 'SELECT {select_value} FROM {table.name}{where_part} "
+                f"OFFSET {offset} LIMIT {limit}'[/cyan]"
             )
 
         query = (
@@ -724,6 +744,8 @@ class Database:
             .limit(limit)
             .select_from(sql_table(table.name, schema=table.schema))
         )
+        if where:
+            query = query.where(text(where))
         order = self.order_clause(table)
         if order is not None:
             query = query.order_by(text(order))

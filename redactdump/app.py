@@ -92,11 +92,8 @@ class RedactDump:
 
         # One connection per table so every batch reads the same snapshot.
         async with self.database.table_connection() as conn:
-            row_count = (
-                await self.database.count_rows(table, conn=conn)
-                if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
-                else int(self.config["limits"]["max_rows_per_table"])
-            )
+            max_rows = self.max_rows_for(table.name)
+            row_count = max_rows if max_rows is not None else await self.database.count_rows(table, conn=conn)
 
             for offset in range(0, row_count, step):
                 data = await self.database.get_data(table, offset, min(step, row_count - offset), conn=conn)
@@ -106,6 +103,23 @@ class RedactDump:
             location = await file.write_to_file(table, [])
 
         return table, row_count, location
+
+    def max_rows_for(self, table_name: str) -> Optional[int]:
+        """Resolve the configured row cap for a table.
+
+        A limits.per_table max_rows wins over the global
+        limits.max_rows_per_table; without either there is no cap.
+
+        Args:
+            table_name (str): The table being dumped.
+        """
+        limits = self.config.get("limits") or {}
+        override = (limits.get("per_table") or {}).get(table_name) or {}
+        if override.get("max_rows") is not None:
+            return int(override["max_rows"])
+        if "max_rows_per_table" in limits:
+            return int(limits["max_rows_per_table"])
+        return None
 
     def report_coverage(self, tables: List[Table]) -> None:
         """Print which rule would redact each column, without reading any data.
@@ -179,16 +193,11 @@ class RedactDump:
 
             sorted_output = sorted(result, key=lambda d: d[1], reverse=True)
 
-            row_count_limited = (
-                ""
-                if "limits" not in self.config or "max_rows_per_table" not in self.config["limits"]
-                else " (Limited via config)"
-            )
-
             for res in sorted_output:
                 if res[0].name in failures:
                     table.add_row(res[0].name, "-", "[red]FAILED[/red]")
                     continue
+                row_count_limited = " (Limited via config)" if self.max_rows_for(res[0].name) is not None else ""
                 table.add_row(
                     res[0].name,
                     f"{str(res[1])}{row_count_limited}",

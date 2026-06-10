@@ -155,6 +155,65 @@ async def test_dump_respects_rows_per_request() -> None:
     ]
 
 
+async def test_dump_respects_per_table_max_rows() -> None:
+    """A per-table max_rows caps the rows read for that table."""
+    database = mock_database()
+    file = AsyncMock()
+    file.write_to_file.return_value = "dump.sql"
+    app = make_app(make_config(limits={"per_table": {"users": {"max_rows": 7}}}), database, file)
+    table = Table("users", [])
+
+    result = await app.dump(table)
+
+    assert result[1] == 7
+    database.count_rows.assert_not_called()
+    assert database.get_data.call_args_list == [call(table, 0, 7, conn=ANY)]
+
+
+def test_per_table_max_rows_overrides_global() -> None:
+    """The per-table cap wins over max_rows_per_table; other tables keep the global cap."""
+    config = make_config(limits={"max_rows_per_table": 30, "per_table": {"users": {"max_rows": 7}}})
+    app = make_app(config, mock_database(), AsyncMock())
+    assert app.max_rows_for("users") == 7
+    assert app.max_rows_for("orders") == 30
+
+
+def test_no_caps_configured_means_no_limit() -> None:
+    """Without any cap the row count comes from the database."""
+    app = make_app(make_config(), mock_database(), AsyncMock())
+    assert app.max_rows_for("users") is None
+
+
+async def test_per_table_where_alone_still_counts_rows() -> None:
+    """A where-only override does not cap rows; the filtered count is used."""
+    database = mock_database()
+    database.count_rows.return_value = 3
+    file = AsyncMock()
+    file.write_to_file.return_value = "dump.sql"
+    app = make_app(make_config(limits={"per_table": {"users": {"where": "id > 0"}}}), database, file)
+
+    result = await app.dump(Table("users", []))
+
+    assert result[1] == 3
+    database.count_rows.assert_awaited_once()
+
+
+async def test_run_marks_only_limited_tables(capturing_console: CapturingConsole) -> None:
+    """The limited marker applies per table, not to every row of the summary."""
+    database = mock_database()
+    database.get_tables.return_value = [Table("alpha", []), Table("beta", [])]
+    database.count_rows.return_value = 5
+    database.get_data.return_value = []
+    file = AsyncMock()
+    file.write_to_file.return_value = "out.sql"
+    config = make_config(limits={"per_table": {"alpha": {"max_rows": 10}}})
+    app = make_app(config, database, file, console=capturing_console.console)
+
+    await app.run()
+
+    assert capturing_console.text.count("Limited via config") == 1
+
+
 async def test_run_writes_deferred_foreign_keys() -> None:
     """After all data is dumped the table's foreign keys are written out."""
     database = mock_database()

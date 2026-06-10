@@ -311,6 +311,25 @@ limits:
     - 'audit_.*'
 ````
 
+### Per-table limits
+
+`limits.max_rows_per_table` caps every table globally. `limits.per_table`
+overrides it for specific tables (exact names): `max_rows` caps that table's
+rows, and `where` filters which rows are dumped, so "all of `users`, only the
+last 30 days of `events`" is expressible:
+
+````yaml
+limits:
+  per_table:
+    events:
+      max_rows: 10000
+      where: "created_at > now() - interval '30 days'"
+````
+
+The `where` clause is passed to the database verbatim, so it can use any
+expression the engine supports. It applies to both the row count and the
+reads; `max_rows` then caps the filtered rows.
+
 ### Output types
 
 `output.type` controls how dumps are written:

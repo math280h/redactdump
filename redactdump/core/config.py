@@ -47,6 +47,13 @@ class ConnectionConfig(StrictModel):
     db_schema: Optional[str] = Field(default=None, alias="schema")
 
 
+class TableLimit(StrictModel):
+    """A per-table row cap and row filter."""
+
+    max_rows: Optional[int] = None
+    where: Optional[str] = None
+
+
 class LimitsConfig(StrictModel):
     """Optional row, column and table limits."""
 
@@ -54,6 +61,7 @@ class LimitsConfig(StrictModel):
     select_columns: Optional[List[str]] = None
     tables: Optional[List[str]] = None
     exclude_tables: Optional[List[str]] = None
+    per_table: Optional[Dict[str, TableLimit]] = None
 
 
 class PerformanceConfig(StrictModel):

@@ -323,6 +323,69 @@ async def test_count_rows_handles_empty_result() -> None:
     assert await database.count_rows(Table("empty", [])) == 0
 
 
+def where_config(table: str, where: str) -> Dict[str, Any]:
+    """Build a config with a per-table where filter."""
+    return make_config(limits={"per_table": {table: {"where": where}}})
+
+
+async def test_count_rows_applies_where_filter() -> None:
+    """A per-table where clause filters the row count."""
+    engine = FakeEngine(counts={"events": 5})
+    database = build_database(where_config("events", "created_at > '2026-01-01'"), engine)
+
+    assert await database.count_rows(Table("events", [])) == 5
+    count_sql = engine.executed[-1][0]
+    assert "WHERE created_at > '2026-01-01'" in count_sql
+
+
+async def test_count_rows_without_filter_has_no_where() -> None:
+    """Without a per-table filter the count is unfiltered."""
+    engine = FakeEngine(counts={"orders": 17})
+    database = build_database(make_config(), engine)
+
+    await database.count_rows(Table("orders", []))
+    assert "WHERE" not in engine.executed[-1][0]
+
+
+async def test_count_rows_where_filter_only_hits_named_table() -> None:
+    """A filter configured for one table leaves other tables unfiltered."""
+    engine = FakeEngine(counts={"orders": 17})
+    database = build_database(where_config("events", "created_at > '2026-01-01'"), engine)
+
+    await database.count_rows(Table("orders", []))
+    assert "WHERE" not in engine.executed[-1][0]
+
+
+async def test_get_data_applies_where_filter() -> None:
+    """A per-table where clause filters the data reads."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]})
+    database = build_database(where_config("users", "id > 0"), engine)
+
+    rows = await database.get_data(passthrough_table(), 0, 100)
+    assert len(rows) == 1
+    select_sql = engine.executed[-1][0]
+    assert "WHERE id > 0" in select_sql
+
+
+async def test_get_data_without_filter_has_no_where() -> None:
+    """Without a per-table filter the data read is unfiltered."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]})
+    database = build_database(make_config(), engine)
+
+    await database.get_data(passthrough_table(), 0, 100)
+    assert "WHERE" not in engine.executed[-1][0]
+
+
+async def test_get_data_debug_includes_where(capturing_console: CapturingConsole) -> None:
+    """Debug mode prints the where clause that will be applied."""
+    engine = FakeEngine(data={"users": [{"id": 1, "email": "a@x.com"}]})
+    config = make_config(debug=True, limits={"per_table": {"users": {"where": "id > 0"}}})
+    database = build_database(config, engine, console=capturing_console.console)
+
+    await database.get_data(passthrough_table(), 0, 100)
+    assert "WHERE id > 0" in capturing_console.text
+
+
 def passthrough_table() -> Table:
     """Build a table with id and email columns."""
     return Table(

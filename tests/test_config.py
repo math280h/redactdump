@@ -88,6 +88,31 @@ def test_non_list_table_filter_rejected(tmp_path: Path) -> None:
         load(tmp_path, data)
 
 
+def test_per_table_limits_accepted(tmp_path: Path) -> None:
+    """The limits.per_table mapping validates and is preserved."""
+    data = base_config()
+    data["limits"] = {"per_table": {"events": {"max_rows": 10000, "where": "created_at > now() - interval '30 days'"}}}
+    result = load(tmp_path, data)
+    assert result["limits"]["per_table"]["events"]["max_rows"] == 10000
+    assert "interval" in result["limits"]["per_table"]["events"]["where"]
+
+
+def test_per_table_non_int_max_rows_rejected(tmp_path: Path) -> None:
+    """A non-integer per-table max_rows violates the schema."""
+    data = base_config()
+    data["limits"] = {"per_table": {"events": {"max_rows": "many"}}}
+    with pytest.raises(RedactDumpError):
+        load(tmp_path, data)
+
+
+def test_per_table_unknown_key_rejected(tmp_path: Path) -> None:
+    """An unknown key in a per-table entry violates the schema."""
+    data = base_config()
+    data["limits"] = {"per_table": {"events": {"limit": 5}}}
+    with pytest.raises(RedactDumpError):
+        load(tmp_path, data)
+
+
 def test_multi_file_output_accepted(tmp_path: Path) -> None:
     """multi_file is a valid output type."""
     data = base_config()
